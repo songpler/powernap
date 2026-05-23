@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>파워냅 / 수면 측정 (베타)</title>
+<style>
+  :root { --bg:#0b1020; --card:#161c2e; --fg:#e8ecf5; --muted:#8b94ad;
+          --accent:#5b8cff; --warn:#ffb24d; --danger:#ff5d6c; --ok:#46d39a; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
+  .wrap { max-width:520px; margin:0 auto; padding:18px; }
+  h1 { font-size:20px; margin:8px 0 2px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:14px; }
+  .card { background:var(--card); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .label { font-size:13px; color:var(--muted); margin:12px 0 6px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; }
+  .opt { flex:1 1 auto; min-width:58px; text-align:center; padding:10px 8px;
+         border:1px solid #2a3350; border-radius:10px; font-size:14px; cursor:pointer; background:#1b2236; user-select:none; }
+  .opt.sel { border-color:var(--accent); background:#22305c; color:#fff; }
+  .preset { display:block; width:100%; text-align:left; padding:12px 14px; margin-bottom:8px;
+            border:1px solid #2a3350; border-radius:12px; background:#1b2236; cursor:pointer; }
+  .preset.sel { border-color:var(--accent); background:#22305c; }
+  .preset .t { font-size:15px; font-weight:600; } .preset .d { font-size:12px; color:var(--muted); margin-top:3px; }
+  input[type=time]{ background:#1b2236; color:var(--fg); border:1px solid #2a3350; border-radius:10px; padding:10px; font-size:16px; width:100%; }
+  textarea { width:100%; background:#1b2236; color:var(--fg); border:1px solid #2a3350; border-radius:10px; padding:10px; font-size:14px; }
+  button.go { width:100%; padding:15px; font-size:17px; font-weight:700; border:none; border-radius:14px; background:var(--accent); color:#fff; cursor:pointer; margin-top:6px; }
+  button.go:disabled { background:#33405f; color:#7c87a3; }
+  button.ghost { background:#1b2236; color:var(--fg); border:1px solid #2a3350; }
+  .hidden { display:none !important; }
+  .big { font-size:54px; font-weight:800; text-align:center; letter-spacing:1px; margin:10px 0; }
+  .state { text-align:center; font-size:18px; padding:8px; border-radius:10px; margin:10px 0; }
+  .state.awake{ color:var(--muted);} .state.light{ color:var(--accent);}
+  .state.stable{ color:var(--ok);} .state.risk{ color:var(--warn);} .state.wake{ color:var(--danger); font-weight:700;}
+  .metrics { display:flex; justify-content:space-around; text-align:center; font-size:13px; color:var(--muted); }
+  .metrics b { display:block; color:var(--fg); font-size:18px; }
+  .note { font-size:12px; color:var(--muted); margin-top:8px; } .warn { color:var(--warn); }
+  .center { text-align:center; } a.dl { color:var(--accent); }
+  .ttl { font-size:16px; font-weight:700; margin:0 0 4px; }
+  button.go.alarm { background:var(--danger); }
+  #dimOverlay { position:fixed; inset:0; background:#000; z-index:999; display:flex;
+    flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+  #dimOverlay .dimClock { font-size:24px; font-weight:700; color:#2f3a55; font-variant-numeric:tabular-nums; }
+  #dimOverlay .dimTxt { font-size:12px; color:#26304a; text-align:center; padding:0 32px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ===== SETUP ===== -->
+  <div id="setup">
+    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타</span></h1>
+    <div class="sub">의료용 수면단계 판정이 아니라, 깨우기 좋은 타이밍을 추정하는 실험용 도구입니다.
+      연구용 익명 데이터 수집에 동의하시면 진행해 주세요.
+      <b>만 14세 미만은 보호자(법정대리인)의 동의를 받은 후 참여해 주세요.</b></div>
+
+    <div class="card">
+      <div class="label">측정 모드</div>
+      <div class="row" id="mode"><div class="opt sel" data-v="nap">파워냅 (낮잠)</div><div class="opt" data-v="night">밤잠</div></div>
+      <div class="label">성별</div>
+      <div class="row" id="gender"><div class="opt" data-v="M">남</div><div class="opt" data-v="F">여</div></div>
+      <div class="label">연령대</div>
+      <div class="row" id="age"><div class="opt" data-v="10s">10대</div><div class="opt" data-v="20s">20대</div><div class="opt" data-v="30s">30대</div><div class="opt" data-v="40s">40대</div><div class="opt" data-v="50s+">50대+</div></div>
+      <div class="label">폰 위치</div>
+      <div class="row" id="pos"><div class="opt" data-v="bed">침대 위</div><div class="opt" data-v="pillow">베개 옆</div><div class="opt" data-v="mattress">매트리스 위</div><div class="opt" data-v="table">협탁</div><div class="opt" data-v="desk">책상</div></div>
+    </div>
+
+    <div class="card">
+      <div class="ttl">⏰ 언제 깨울까요?</div>
+      <div class="note" style="margin-top:0">잠든 뒤 <b>①목표 시간</b>에 깨우되, <b>②안전 상한</b>을 넘기면 무조건, <b>③반드시 깰 시각</b>엔 최후로 깨워요. (셋 중 가장 먼저 오는 시점)</div>
+
+      <div id="napCard">
+        <div class="label">① 목표 수면 시간 — 잠든 뒤 얼마나 잘지 (눕고 잠들기까지는 제외)</div>
+        <div class="preset sel" data-min="15"><div class="t">빠른 회복 · 수면 15분</div><div class="d">가장 안전. 깊은잠 진입 전에 깨움. 권장.</div></div>
+        <div class="preset" data-min="18"><div class="t">표준 · 수면 18분</div><div class="d">균형. 대부분 깊은잠 직전에 깨움.</div></div>
+        <div class="preset" data-min="22"><div class="t">깊은 휴식 · 수면 22분 <span class="warn">⚠ 깊은잠 위험 약간</span></div><div class="d">회복감 ↑ 이지만 일부는 깊은잠에 들어 멍할 수 있음.</div></div>
+        <div class="note" id="napEta"></div>
+      </div>
+
+      <div class="hidden" id="nightCard">
+        <div class="label">밤잠 모드</div>
+        <div class="note">밤새 가속도·소리 <b>특징값만</b> 기록합니다 (원본 오디오 저장 안 함). 배터리 소모가 크니 <b>충전 연결</b> 후 사용하세요.</div>
+        <div class="note warn hidden" id="battWarn">⚠ 충전 중이 아닙니다. 충전기를 연결해 주세요.</div>
+      </div>
+
+      <div class="label" style="margin-top:16px">② 안전 상한 — 잠든 뒤 이 시간을 넘기면 무조건 깨움</div>
+      <div class="row" id="cap"><div class="opt sel" data-v="30">30분</div><div class="opt" data-v="45">45분</div><div class="opt" data-v="60">60분</div><div class="opt" data-v="off">제한 없음</div></div>
+      <div class="note">N3(깊은잠) 위험이 보이면 그 전에 깨워요. '제한 없음'은 ③ 기상 시각 설정을 권장.</div>
+
+      <div class="label" style="margin-top:16px">③ 반드시 깰 시각 (선택) — 모든 예측이 빗나가도 이 시각엔 깨움</div>
+      <input type="time" id="deadline" />
+      <div class="note" id="dlNote">파워냅은 보통 ①·②로 깨우고, 이 시각은 최후의 안전선이에요.</div>
+    </div>
+
+    <div class="card">
+      <label class="row" style="align-items:center;gap:10px;cursor:pointer;">
+        <input type="checkbox" id="useMic" /><span>마이크로 코골이·소리 특징 기록 (선택 — 조용한 방에서만 권장, 원본 미저장)</span>
+      </label>
+    </div>
+
+    <button class="go" id="startBtn">측정 시작</button>
+    <button class="go ghost" id="alarmTestBtn" style="margin-top:8px;">🔔 알람 소리 미리듣기</button>
+    <div class="note center" id="permNote"></div>
+    <div class="note center" id="modelNote"></div>
+  </div>
+
+  <!-- ===== MEASURING ===== -->
+  <div id="measure" class="hidden">
+    <div class="card">
+      <div class="state awake" id="stateText">측정 준비 중…</div>
+      <div class="big" id="clock">00:00</div>
+      <div class="metrics">
+        <div><b id="mElapsed">0</b>경과(분)</div><div><b id="mSleep">–</b>수면(분)</div>
+        <div><b id="mStill">0%</b>안정도</div><div><b id="mRisk">–</b>N3위험</div>
+      </div>
+      <div class="note center" id="calNote">처음 약 90초간 기준값을 잡는 중입니다. 편하게 누워 계세요.</div>
+      <div class="note center warn">⚠ 측정 중에는 화면을 끄지 마세요. 끄면 측정이 멈춰요.</div>
+    </div>
+    <button class="go alarm hidden" id="wakeBtn">⏰ 일어났어요 (알람 끄기)</button>
+    <button class="go" id="dimBtn">🌙 확인 · 화면 어둡게 (측정은 계속)</button>
+    <button class="go ghost" id="stopBtn">측정 종료</button>
+  </div>
+
+  <!-- ===== DONE ===== -->
+  <div id="done" class="hidden">
+    <h1>측정 완료</h1>
+    <div class="card"><div id="summary"></div></div>
+    <div class="card">
+      <div class="label">간단 피드백 (선택사항 — 건너뛰어도 됩니다)</div>
+      <div class="label">잠든 것 같았나요?</div>
+      <div class="row" id="fbAsleep"><div class="opt" data-v="yes">네</div><div class="opt" data-v="no">아니요</div><div class="opt" data-v="unsure">모름</div></div>
+      <div class="label">깨고 나서 컨디션</div>
+      <div class="row" id="fbCond"><div class="opt" data-v="fresh">개운함</div><div class="opt" data-v="ok">보통</div><div class="opt" data-v="groggy">멍함</div></div>
+      <div class="label">알람 타이밍</div>
+      <div class="row" id="fbTiming"><div class="opt" data-v="early">너무 일찍</div><div class="opt" data-v="good">적당</div><div class="opt" data-v="late">너무 늦게</div></div>
+      <div class="label">한 줄 메모 (선택)</div>
+      <textarea id="fbNote" rows="2" placeholder="자유롭게…"></textarea>
+    </div>
+    <button class="go" id="saveBtn">데이터 저장 (서버 전송)</button>
+    <div class="note center" id="dlLink"></div>
+    <button class="go ghost" id="againBtn" style="margin-top:10px;">새 측정</button>
+  </div>
+</div>
+
+<!-- n3_risk model (generated by scripts/export_n3_risk_web.py). Optional: if
+     missing, the engine falls back to rule-only mode. -->
+<div id="dimOverlay" class="hidden">
+  <div class="dimClock" id="dimClock">00:00</div>
+  <div class="dimTxt">측정 중 · 화면을 끄지 마세요 · 화면을 탭하면 밝아집니다</div>
+</div>
+<script src="n3_risk_model.js" onerror="window.__N3_MISSING=true;"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+// --- Supabase 자동 저장 설정 ---
+// 이 두 값은 외부 공개용(publishable)이라 코드에 넣어도 안전합니다.
+// 보안은 DB의 RLS 규칙(익명은 INSERT만 가능)으로 막습니다.
+const SUPABASE_URL = "https://luvgdfjiukxztecjnspl.supabase.co";
+const SUPABASE_KEY = "sb_publishable_OwXRZqUDHY0SBATbCV6bwg_Oe-DpHbd";
+const SUPABASE_TABLE = "nap_sessions";
+
+async function uploadToSupabase(payload){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
+    method: "POST",
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": "Bearer " + SUPABASE_KEY,
+      "Content-Type": "application/json",
+      "Prefer": "return=minimal",
+    },
+    body: JSON.stringify({ data: payload }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error("HTTP " + res.status + " " + t.slice(0, 120));
+  }
+}
+
+function pickGroup(groupId, multi=false){
+  const el=$(groupId);
+  el.addEventListener("click",(e)=>{ const o=e.target.closest(".opt"); if(!o) return;
+    if(!multi){[...el.children].forEach(c=>c.classList.remove("sel"));} o.classList.toggle("sel"); });
+  return ()=>{ const s=el.querySelector(".opt.sel"); return s?s.dataset.v:null; };
+}
+const getMode=pickGroup("mode"), getGender=pickGroup("gender"), getAge=pickGroup("age"),
+      getPos=pickGroup("pos"), getCap=pickGroup("cap");
+const getFbAsleep=pickGroup("fbAsleep"), getFbCond=pickGroup("fbCond"), getFbTiming=pickGroup("fbTiming");
+
+let napTargetMin=15;
+$("napCard").addEventListener("click",(e)=>{ const p=e.target.closest(".preset"); if(!p) return;
+  [...$("napCard").querySelectorAll(".preset")].forEach(c=>c.classList.remove("sel"));
+  p.classList.add("sel"); napTargetMin=parseInt(p.dataset.min,10); updateEta(); });
+function updateEta(){ $("napEta").textContent=`예상: 잠든 뒤 약 ${napTargetMin}분 수면 후 깨움. (눕고 잠들기까지 걸린 시간은 별도)`; }
+updateEta();
+
+$("mode").addEventListener("click",()=>{ const m=getMode();
+  $("napCard").classList.toggle("hidden", m!=="nap");
+  $("nightCard").classList.toggle("hidden", m!=="night");
+  $("dlNote").textContent = m==="night"
+    ? "밤잠은 이 시각 근처(가벼운 수면 구간)에서 깨우려 시도하고, 늦어도 이 시각엔 깨웁니다."
+    : "파워냅은 보통 프리셋·안전상한으로 깨우고, 이 시각은 최후 안전선입니다.";
+  checkBattery(); });
+async function checkBattery(){ if(getMode()!=="night"||!navigator.getBattery){$("battWarn").classList.add("hidden");return;}
+  try{const b=await navigator.getBattery(); $("battWarn").classList.toggle("hidden", b.charging);}catch(e){} }
+
+// model availability note
+window.addEventListener("load",()=>{
+  if(window.N3_RISK && window.N3_RISK.predict){
+    $("modelNote").textContent=`N3 위험 모델 로드됨 (트리 ${window.N3_RISK.n_trees}개).`;
+  } else {
+    $("modelNote").innerHTML=`<span class="warn">N3 모델 파일 없음 — 룰 기반으로만 작동합니다. (export_n3_risk_web.py 실행 후 n3_risk_model.js 배포)</span>`;
+  }
+});
+
+// ---------------- feature computation (JS port of calibration.py) ----------------
+const EPOCH_SEC=30, CAL_SEC=90, G=9.80665, EPS=1e-4, RCLIP=20.0, DCLIP=-2.0;
+function rms(a){let s=0;for(const v of a)s+=v*v;return Math.sqrt(s/Math.max(a.length,1));}
+function percentile(a,p){ if(!a.length)return 0; const b=[...a].sort((x,y)=>x-y);
+  const i=Math.min(b.length-1,Math.max(0,Math.round((p/100)*(b.length-1)))); return b[i]; }
+function clip(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
+function safeLogRatio(num,den){return clip(Math.log((num+EPS)/(den+EPS)), DCLIP*2, RCLIP);}
+function safeRatio(num,den){return clip(num/Math.max(den,EPS),0,RCLIP);}
+
+function computeMags(buf, fs){
+  const n=buf.length, mag=new Array(n), enmo=new Array(n), dyn=new Array(n);
+  for(let i=0;i<n;i++){const a=buf[i];const m=Math.sqrt(a[0]*a[0]+a[1]*a[1]+a[2]*a[2]);mag[i]=m;enmo[i]=Math.max(m-1,0);}
+  const win=Math.max(2,Math.round(3*fs)), half=win>>1;
+  for(let i=0;i<n;i++){ let lo=Math.max(0,i-half),hi=Math.min(n,i+half+1),s=0;
+    for(let j=lo;j<hi;j++)s+=mag[j]; dyn[i]=Math.abs(mag[i]-s/(hi-lo)); }
+  return {enmo,dyn};
+}
+// quiet-window robust baseline (enmo + dyn percentiles)
+function fitBaseline(enmo, dyn, fs){
+  const win=Math.max(1,Math.round(5*fs)), nWin=Math.floor(enmo.length/win);
+  let ie=enmo, id=dyn;
+  if(nWin>=3){ const sc=[]; for(let w=0;w<nWin;w++){sc.push([rms(enmo.slice(w*win,(w+1)*win)),w]);}
+    sc.sort((a,b)=>a[0]-b[0]); const keep=Math.max(1,Math.round(nWin*0.4));
+    ie=[]; id=[]; for(let k=0;k<keep;k++){const w=sc[k][1];for(let i=w*win;i<(w+1)*win;i++){ie.push(enmo[i]);id.push(dyn[i]);}} }
+  return { enmo_median:Math.max(percentile(ie,50),EPS), enmo_p75:Math.max(percentile(ie,75),EPS),
+           enmo_p90:Math.max(percentile(ie,90),EPS), dyn_median:Math.max(percentile(id,50),EPS),
+           dyn_p75:Math.max(percentile(id,75),EPS), dyn_p90:Math.max(percentile(id,90),EPS) };
+}
+// 17 phone_only features as a name->value object
+function featuresForEpoch(enmo, dyn, b, timeMin, fs){
+  const enmo_rms=rms(enmo), enmo_p75=percentile(enmo,75), enmo_p90=percentile(enmo,90);
+  const dyn_rms=rms(dyn), dyn_p75=percentile(dyn,75);
+  let burst=0; for(const v of dyn) if(v>b.dyn_p90+EPS) burst++;
+  return {
+    enmo_rms, enmo_p75, enmo_p90, dyn_rms, dyn_p75,
+    enmo_rms_log_ratio:safeLogRatio(enmo_rms,b.enmo_median),
+    enmo_p75_log_ratio:safeLogRatio(enmo_p75,b.enmo_p75),
+    enmo_p90_log_ratio:safeLogRatio(enmo_p90,b.enmo_p90),
+    dyn_rms_log_ratio:safeLogRatio(dyn_rms,b.dyn_median),
+    dyn_p75_log_ratio:safeLogRatio(dyn_p75,b.dyn_p75),
+    enmo_rms_ratio_clip:safeRatio(enmo_rms,b.enmo_median),
+    dyn_rms_ratio_clip:safeRatio(dyn_rms,b.dyn_median),
+    enmo_drop_pct:clip(1-safeRatio(enmo_rms,b.enmo_p75),DCLIP,1),
+    dyn_drop_pct:clip(1-safeRatio(dyn_rms,b.dyn_p75),DCLIP,1),
+    burst_count:burst, burst_rate_per_sec:burst/Math.max(enmo.length/fs,1e-3),
+    time_min_since_start:timeMin,
+  };
+}
+function n3RiskFrom(featObj){
+  if(!(window.N3_RISK && window.N3_RISK.predict)) return null;
+  const x=window.N3_RISK.feature_names.map(n=> (n in featObj)?featObj[n]:0);
+  return window.N3_RISK.predict(x);
+}
+
+// ---------------- session state ----------------
+let session=null, wakeLock=null, motionHandler=null, micStream=null, micCtx=null, micAnalyser=null, clockIv=null, alarmCtx=null, alarmIv=null, dimTimer=null;
+function nowMin(){return (Date.now()-session.t0)/60000;}
+function newSession(){ return {
+  t0:Date.now(), mode:getMode(), gender:getGender(), age:getAge(), pos:getPos(),
+  target_min:napTargetMin, cap:getCap(), deadline:$("deadline").value, useMic:$("useMic").checked,
+  accelBuf:[], calAccel:[], baseline:null, fs:50, epochs:[], micBuf:[],
+  onsetMin:null, asleepStreak:0, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
+};}
+
+function onMotion(ev){ const a=ev.accelerationIncludingGravity||ev.acceleration; if(!a) return;
+  session.accelBuf.push([(a.x||0)/G,(a.y||0)/G,(a.z||0)/G]); }
+
+async function startMic(){ try{
+  micStream=await navigator.mediaDevices.getUserMedia({audio:true});
+  micCtx=new (window.AudioContext||window.webkitAudioContext)();
+  const src=micCtx.createMediaStreamSource(micStream); micAnalyser=micCtx.createAnalyser();
+  micAnalyser.fftSize=2048; src.connect(micAnalyser);
+  setInterval(()=>{ if(!micAnalyser||session.woke)return; const buf=new Float32Array(micAnalyser.fftSize);
+    micAnalyser.getFloatTimeDomainData(buf); let s=0,zc=0;
+    for(let i=0;i<buf.length;i++){ s+=buf[i]*buf[i];
+      if(i>0&&((buf[i-1]<0&&buf[i]>=0)||(buf[i-1]>=0&&buf[i]<0))) zc++; }
+    session.micBuf.push({t:nowMin(),rms:Math.sqrt(s/buf.length),zcr:zc/buf.length}); },5000);
+}catch(e){console.warn("mic failed",e);} }
+
+// ---------------- epoch loop ----------------
+function processEpoch(){
+  if(!session||session.woke) return;
+  const buf=session.accelBuf; session.accelBuf=[];
+  if(buf.length<5) return;
+  const elapsed=nowMin();
+  if(elapsed < CAL_SEC/60){ for(const r of buf) session.calAccel.push(r); return; }
+  if(!session.baseline){
+    session.fs=Math.max(10, session.calAccel.length/(CAL_SEC));
+    const cm=computeMags(session.calAccel,session.fs);
+    session.baseline=fitBaseline(cm.enmo,cm.dyn,session.fs);
+  }
+  const fs=Math.max(10, buf.length/EPOCH_SEC);
+  const cm=computeMags(buf,fs);
+  const feat=featuresForEpoch(cm.enmo,cm.dyn,session.baseline,elapsed,fs);
+  const stillness=clip(feat.enmo_drop_pct,0,1);
+  const n3=n3RiskFrom(feat);
+  // 모델 입력 17개 특징을 전부 저장 → 나중에 실제 데이터로 재학습 가능
+  const r5=v=>+(+v).toFixed(5), r4=v=>+(+v).toFixed(4), r3=v=>+(+v).toFixed(3);
+  const rec={t:+elapsed.toFixed(2),
+    enmo_rms:r5(feat.enmo_rms), enmo_p75:r5(feat.enmo_p75), enmo_p90:r5(feat.enmo_p90),
+    dyn_rms:r5(feat.dyn_rms), dyn_p75:r5(feat.dyn_p75),
+    enmo_rms_log_ratio:r4(feat.enmo_rms_log_ratio), enmo_p75_log_ratio:r4(feat.enmo_p75_log_ratio),
+    enmo_p90_log_ratio:r4(feat.enmo_p90_log_ratio), dyn_rms_log_ratio:r4(feat.dyn_rms_log_ratio),
+    dyn_p75_log_ratio:r4(feat.dyn_p75_log_ratio),
+    enmo_rms_ratio_clip:r4(feat.enmo_rms_ratio_clip), dyn_rms_ratio_clip:r4(feat.dyn_rms_ratio_clip),
+    enmo_drop_pct:r3(feat.enmo_drop_pct), dyn_drop_pct:r3(feat.dyn_drop_pct),
+    burst_count:feat.burst_count, burst_rate_per_sec:r4(feat.burst_rate_per_sec),
+    time_min_since_start:+feat.time_min_since_start.toFixed(2),
+    stillness:r3(stillness), n3_risk:(n3==null?null:r4(n3))};
+  session.epochs.push(rec);
+
+  if(session.onsetMin===null){ session.asleepStreak=stillness>=0.5?session.asleepStreak+1:0;
+    if(session.asleepStreak>=2) session.onsetMin=elapsed; }
+  decideWake(elapsed, stillness, n3);
+  updateUI(elapsed, stillness, n3);
+}
+
+function decideWake(elapsed, stillness, n3){
+  const s=session, MIN_NAP=10;
+  // deadline (both modes)
+  if(s.deadline){ const [hh,mm]=s.deadline.split(":").map(Number);
+    const dl=new Date(); dl.setHours(hh,mm,0,0);
+    const minsToDl=(dl.getTime()-Date.now())/60000;
+    if(minsToDl<=0.2 && (Date.now()-s.t0)>60000) return fireWake("deadline");
+    if(minsToDl<=5 && minsToDl>0 && stillness<0.5) return fireWake("deadline_window");
+  }
+  if(s.mode==="night") return;          // night = record + deadline (Phase 1)
+  if(elapsed<MIN_NAP) return;           // protect minimum
+
+  const napClock = s.onsetMin!==null ? (elapsed-s.onsetMin) : (elapsed>=20?elapsed-20:0);
+
+  // EMERGENCY: N3 risk high (only after onset). Strong threshold before target.
+  if(s.onsetMin!==null && n3!=null){
+    const deepRisk = 0.7*n3 + 0.3*stillness;
+    const thr = napClock < s.target_min ? 0.70 : 0.55;
+    if(deepRisk>=thr) return fireWake("n3_risk_imminent");
+  }
+  // PRIMARY: target reached (from onset) + settled
+  if(napClock>=s.target_min && stillness>=0.45) return fireWake("target_reached_stable");
+  // SAFETY CAP: max sleep from onset (configurable; default 30)
+  if(s.onsetMin!==null && s.cap!=="off"){
+    const capMin=parseInt(s.cap,10);
+    if((elapsed-s.onsetMin)>=capMin) return fireWake("safety_cap");
+  }
+  // overrun fallback
+  if(napClock>=s.target_min+5) return fireWake("max_time");
+}
+
+function fireWake(reason){ if(session.woke) return;
+  session.woke=true; session.wakeReason=reason; session.wakeAtMin=+nowMin().toFixed(2);
+  if(dimTimer)clearTimeout(dimTimer); $("wakeBtn").classList.remove("hidden");
+  triggerAlarm(); $("stateText").textContent="⏰ 깨우는 중! ("+reason+")"; $("stateText").className="state wake"; }
+
+// 모바일은 "사용자가 버튼 누른 직후"에 깨운 소리 엔진만 재생을 허락 → 측정 시작 때 미리 깨워둠
+function unlockAudio(){
+  try{
+    if(!alarmCtx) alarmCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(alarmCtx.state==="suspended") alarmCtx.resume();
+    const o=alarmCtx.createOscillator(),g=alarmCtx.createGain();
+    g.gain.value=0.00001; o.connect(g); g.connect(alarmCtx.destination);
+    o.start(); o.stop(alarmCtx.currentTime+0.02);   // 거의 무음 → 오디오 잠금만 해제
+  }catch(e){}
+}
+function playBeeps(times){
+  try{
+    if(!alarmCtx) alarmCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(alarmCtx.state==="suspended") alarmCtx.resume();
+    const ctx=alarmCtx;
+    const beep=()=>{const o=ctx.createOscillator(),g=ctx.createGain();o.connect(g);g.connect(ctx.destination);
+      o.type="sine";o.frequency.value=880;g.gain.setValueAtTime(0.001,ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.4,ctx.currentTime+0.05);
+      g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.6);o.start();o.stop(ctx.currentTime+0.65);};
+    beep(); let n=1; const iv=setInterval(()=>{if(++n>times){clearInterval(iv);return;}beep();},800);
+  }catch(e){}
+  if(navigator.vibrate) navigator.vibrate([400,200,400,200,400]);
+}
+// 알람: 끌 때까지 계속, 크게(square파), 패턴 교차(상승음/연타/사이렌), 점점 시끄럽게
+function playPattern(idx){
+  try{
+    if(!alarmCtx) alarmCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(alarmCtx.state==="suspended") alarmCtx.resume();
+    const ctx=alarmCtx, t0=ctx.currentTime;
+    const vol=Math.min(0.95, 0.6+0.04*idx);   // 회차가 늘수록 조금씩 더 크게
+    const tone=(freq,start,dur)=>{ const o=ctx.createOscillator(),g=ctx.createGain();
+      o.type="square"; o.frequency.value=freq; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001,t0+start);
+      g.gain.exponentialRampToValueAtTime(vol,t0+start+0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001,t0+start+dur);
+      o.start(t0+start); o.stop(t0+start+dur+0.03); };
+    const p=idx%3;
+    if(p===0){ tone(880,0,0.18); tone(1175,0.22,0.18); tone(1568,0.44,0.28); }                 // 상승 3음
+    else if(p===1){ tone(1047,0,0.12); tone(1047,0.18,0.12); tone(1047,0.36,0.12); tone(1047,0.54,0.22); } // 빠른 연타
+    else { tone(1568,0,0.1); tone(784,0.14,0.1); tone(1568,0.28,0.1); tone(784,0.42,0.1); tone(1568,0.56,0.22); } // 사이렌 교차
+  }catch(e){}
+}
+function startAlarm(){
+  $("dimOverlay").classList.add("hidden");   // 알람 시 화면 밝게
+  if(alarmIv) return;
+  let i=0; playPattern(i++);
+  if(navigator.vibrate) navigator.vibrate([500,150,500,150,700]);
+  alarmIv=setInterval(()=>{ playPattern(i++); if(navigator.vibrate) navigator.vibrate([500,150,500,150,700]); }, 1100);
+}
+function stopAlarm(){ if(alarmIv){ clearInterval(alarmIv); alarmIv=null; } if(navigator.vibrate) navigator.vibrate(0); }
+function triggerAlarm(){ startAlarm(); }
+
+function updateUI(elapsed, stillness, n3){
+  $("mElapsed").textContent=Math.floor(elapsed);
+  $("mSleep").textContent=session.onsetMin!==null?Math.floor(Math.max(0,elapsed-session.onsetMin)):"–";
+  $("mStill").textContent=Math.round(stillness*100)+"%";
+  $("mRisk").textContent=n3==null?"–":Math.round(n3*100)+"%";
+  if(session.woke) return;
+  let cls="awake",txt="깨어있음 / 입면 전";
+  if(session.onsetMin!==null){
+    if(n3!=null && (0.7*n3+0.3*stillness)>=0.5){cls="risk";txt="깊은잠 위험 상승";}
+    else if(stillness>=0.6){cls="stable";txt="안정 수면 추정";}
+    else{cls="light";txt="얕은 수면 추정";}
+  } else if(stillness>=0.4){cls="light";txt="잠드는 중…";}
+  $("stateText").className="state "+cls; $("stateText").textContent=txt;
+}
+
+function startClock(){ clockIv=setInterval(()=>{
+  const ms=Date.now()-session.t0,m=Math.floor(ms/60000),s=Math.floor(ms/1000)%60;
+  $("clock").textContent=String(m).padStart(2,"0")+":"+String(s).padStart(2,"0");
+  $("dimClock").textContent=$("clock").textContent;
+  if(nowMin()-session.lastEpochAt>=EPOCH_SEC/60){session.lastEpochAt=nowMin();processEpoch();}
+  if(session.baseline)$("calNote").textContent="측정 중… 화면을 끄지 말고 그대로 두세요.";
+},1000); }
+
+async function requestPerms(){
+  if(typeof DeviceMotionEvent!=="undefined" && typeof DeviceMotionEvent.requestPermission==="function"){
+    try{const r=await DeviceMotionEvent.requestPermission(); if(r!=="granted") return "가속도 센서 권한이 필요합니다.";}
+    catch(e){return "가속도 센서 권한 요청 실패.";} }
+  return null;
+}
+
+$("startBtn").addEventListener("click", async ()=>{
+  if(!getGender()||!getAge()||!getPos()){$("permNote").textContent="성별·연령대·폰 위치를 선택해 주세요.";return;}
+  unlockAudio();   // 사용자 탭(제스처) 안에서 소리 엔진을 깨워둬야 나중에 알람이 울림
+  $("startBtn").disabled=true; $("permNote").textContent="권한 확인 중…";
+  const err=await requestPerms();
+  if(err){$("permNote").textContent=err;$("startBtn").disabled=false;return;}
+  session=newSession(); motionHandler=onMotion; window.addEventListener("devicemotion",motionHandler);
+  try{if(navigator.wakeLock)wakeLock=await navigator.wakeLock.request("screen");}catch(e){}
+  if(session.useMic) await startMic();
+  $("setup").classList.add("hidden"); $("measure").classList.remove("hidden");
+  session.lastEpochAt=0; startClock(); scheduleDim();
+});
+
+// 알람 소리 미리듣기 (탭=제스처라 여기서 오디오 잠금도 해제됨). 미리듣기는 3.5초 뒤 자동 정지.
+$("alarmTestBtn").addEventListener("click", ()=>{ unlockAudio(); startAlarm(); setTimeout(stopAlarm,3500);
+  $("permNote").textContent="이게 실제 알람 소리예요. 진짜 알람은 끌 때까지 계속 울려요. (안 들리면 무음모드/볼륨 확인)"; });
+
+// 화면 어둡게(dim) — 측정은 계속, 빛만 줄임. 30초 무동작 시 자동, 탭하면 다시 밝아짐.
+function scheduleDim(){ if(dimTimer)clearTimeout(dimTimer);
+  dimTimer=setTimeout(()=>{ if(session&&!session.woke) $("dimOverlay").classList.remove("hidden"); }, 30000); }
+function brighten(){ $("dimOverlay").classList.add("hidden"); scheduleDim(); }
+$("dimBtn").addEventListener("click", ()=>{ if(session&&!session.woke) $("dimOverlay").classList.remove("hidden"); });
+$("dimOverlay").addEventListener("click", brighten);
+$("wakeBtn").addEventListener("click", ()=>{ stopAlarm(); endSession(); });
+
+// 화면이 다시 켜지면 화면 꺼짐 방지(Wake Lock)를 다시 잡고, 화면 끄지 말라고 안내
+document.addEventListener("visibilitychange", async ()=>{
+  if(document.visibilityState==="visible" && session && !session.woke){
+    try{ if(navigator.wakeLock) wakeLock=await navigator.wakeLock.request("screen"); }catch(e){}
+    if($("calNote")) $("calNote").textContent="⚠ 화면이 꺼지면 측정이 멈춰요. 화면을 켠 채로 두세요.";
+  }
+});
+
+$("stopBtn").addEventListener("click", endSession);
+function endSession(){
+  if(clockIv)clearInterval(clockIv);
+  stopAlarm(); if(dimTimer)clearTimeout(dimTimer);
+  $("dimOverlay").classList.add("hidden"); $("wakeBtn").classList.add("hidden");
+  if(motionHandler)window.removeEventListener("devicemotion",motionHandler);
+  if(wakeLock){try{wakeLock.release();}catch(e){}wakeLock=null;}
+  if(micStream)micStream.getTracks().forEach(t=>t.stop());
+  if(micCtx){try{micCtx.close();}catch(e){}}
+  $("measure").classList.add("hidden"); $("done").classList.remove("hidden");
+  const dur=+nowMin().toFixed(1);
+  const sleep=session.onsetMin!==null?(session.wakeAtMin||dur)-session.onsetMin:null;
+  $("summary").innerHTML=`모드: <b>${session.mode==="nap"?"파워냅":"밤잠"}</b><br>총 측정: <b>${dur}분</b>`+
+    (session.onsetMin!==null?`<br>추정 입면: ${session.onsetMin.toFixed(1)}분 후, 실제 수면 약 <b>${sleep.toFixed(1)}분</b>`:`<br>입면 미감지`)+
+    (session.wakeReason?`<br>알람: ${session.wakeReason}`:`<br>알람 미발동`)+
+    `<br>수집 epoch: ${session.epochs.length}개`+
+    (window.N3_RISK?`<br>N3 모델: 사용`:`<br>N3 모델: 미사용(룰만)`);
+}
+
+function buildPayload(){
+  return { schema:"powernap_web_v0",
+    session_id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
+    created:new Date().toISOString(),
+    model:{ n3_risk: !!(window.N3_RISK), n_trees: window.N3_RISK?window.N3_RISK.n_trees:0 },
+    meta:{mode:session.mode,gender:session.gender,age:session.age,pos:session.pos,
+          target_min:session.target_min,cap:session.cap,deadline:session.deadline,useMic:session.useMic},
+    result:{duration_min:+nowMin().toFixed(2),onset_min:session.onsetMin,
+            wake_reason:session.wakeReason,wake_at_min:session.wakeAtMin},
+    feedback:{asleep:getFbAsleep(),condition:getFbCond(),timing:getFbTiming(),note:$("fbNote").value||null},
+    epochs_30s:session.epochs, audio_features_5s:session.micBuf };
+}
+function showDownload(payload){
+  const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
+  const url=URL.createObjectURL(blob), fn=`sleep_${session.mode}_${Date.now()}.json`;
+  $("dlLink").innerHTML=`<a class="dl" href="${url}" download="${fn}">⬇ ${fn} 다운로드</a>`
+    +`<br><span class="note">서버 저장에 실패했어요. 이 파일을 보내주시면 됩니다.</span>`;
+}
+$("saveBtn").addEventListener("click", async ()=>{
+  const btn=$("saveBtn"); const payload=buildPayload();
+  btn.disabled=true; btn.textContent="저장 중…"; $("dlLink").textContent="";
+  try{
+    await uploadToSupabase(payload);
+    btn.textContent="✅ 서버 저장 완료";
+    $("dlLink").innerHTML=`<span class="note">데이터가 서버에 안전하게 저장됐어요. 감사합니다!</span>`;
+  }catch(err){
+    btn.disabled=false; btn.textContent="다시 저장 시도";
+    showDownload(payload);
+  }
+});
+$("againBtn").addEventListener("click",()=>location.reload());
+</script>
+</body>
+</html>
