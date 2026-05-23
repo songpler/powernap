@@ -74,7 +74,7 @@
         <div class="label">① 목표 수면 시간 — 잠든 뒤 얼마나 잘지 (눕고 잠들기까지는 제외)</div>
         <div class="preset sel" data-min="15"><div class="t">빠른 회복 · 수면 15분</div><div class="d">가장 안전. 깊은잠 진입 전에 깨움. 권장.</div></div>
         <div class="preset" data-min="18"><div class="t">표준 · 수면 18분</div><div class="d">균형. 대부분 깊은잠 직전에 깨움.</div></div>
-        <div class="preset" data-min="22"><div class="t">깊은 휴식 · 수면 22분 <span class="warn">⚠ 깊은잠 위험</span></div><div class="d">회복감 ↑ 이지만 일부는 깊은잠에 들어 멍할 수 있음.</div></div>
+        <div class="preset" data-min="22"><div class="t">깊은 휴식 · 수면 22분 <span class="warn">⚠ 깊은잠 위험 약간</span></div><div class="d">회복감 ↑ 이지만 일부는 깊은잠에 들어 멍할 수 있음.</div></div>
         <div class="note" id="napEta"></div>
       </div>
 
@@ -115,10 +115,9 @@
         <div><b id="mStill">0%</b>안정도</div><div><b id="mRisk">–</b>N3위험</div>
       </div>
       <div class="note center" id="calNote">처음 약 90초간 기준값을 잡는 중입니다. 편하게 누워 계세요.</div>
-      <div class="note center warn">⚠ 측정 중에는 화면을 끄지 마세요. 끄면 측정이 멈춰요.</div>
     </div>
     <button class="go alarm hidden" id="wakeBtn">⏰ 일어났어요 (알람 끄기)</button>
-    <button class="go" id="dimBtn">🌙 확인 · 화면 어둡게 (측정은 계속)</button>
+    <button class="go" id="dimBtn">🌙 확인 · 화면 끄지 말고 어둡게 (측정 계속)</button>
     <button class="go ghost" id="stopBtn">측정 종료</button>
   </div>
 
@@ -126,6 +125,7 @@
   <div id="done" class="hidden">
     <h1>측정 완료</h1>
     <div class="card"><div id="summary"></div></div>
+    <div class="note center" id="saveStatus"></div>
     <div class="card">
       <div class="label">간단 피드백 (선택사항 — 건너뛰어도 됩니다)</div>
       <div class="label">잠든 것 같았나요?</div>
@@ -137,7 +137,7 @@
       <div class="label">한 줄 메모 (선택)</div>
       <textarea id="fbNote" rows="2" placeholder="자유롭게…"></textarea>
     </div>
-    <button class="go" id="saveBtn">데이터 저장 (서버 전송)</button>
+    <button class="go" id="saveBtn">피드백 보내기 (선택)</button>
     <div class="note center" id="dlLink"></div>
     <button class="go ghost" id="againBtn" style="margin-top:10px;">새 측정</button>
   </div>
@@ -276,6 +276,7 @@ function newSession(){ return {
   target_min:napTargetMin, cap:getCap(), deadline:$("deadline").value, useMic:$("useMic").checked,
   accelBuf:[], calAccel:[], baseline:null, fs:50, epochs:[], micBuf:[],
   onsetMin:null, asleepStreak:0, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
+  id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
 };}
 
 function onMotion(ev){ const a=ev.accelerationIncludingGravity||ev.acceleration; if(!a) return;
@@ -434,10 +435,19 @@ function updateUI(elapsed, stillness, n3){
   $("stateText").className="state "+cls; $("stateText").textContent=txt;
 }
 
+// 데드라인은 센서/보정과 무관하게 매초 검사 (PC·보정 중에도 반드시 울리도록)
+function checkDeadline(){
+  const s=session; if(!s||s.woke||!s.deadline) return;
+  const [hh,mm]=s.deadline.split(":").map(Number); if(isNaN(hh)) return;
+  const dl=new Date(); dl.setHours(hh,mm,0,0);
+  const minsToDl=(dl.getTime()-Date.now())/60000;
+  if(minsToDl<=0.2 && (Date.now()-s.t0)>10000) fireWake("deadline");
+}
 function startClock(){ clockIv=setInterval(()=>{
   const ms=Date.now()-session.t0,m=Math.floor(ms/60000),s=Math.floor(ms/1000)%60;
   $("clock").textContent=String(m).padStart(2,"0")+":"+String(s).padStart(2,"0");
   $("dimClock").textContent=$("clock").textContent;
+  checkDeadline();
   if(nowMin()-session.lastEpochAt>=EPOCH_SEC/60){session.lastEpochAt=nowMin();processEpoch();}
   if(session.baseline)$("calNote").textContent="측정 중… 화면을 끄지 말고 그대로 두세요.";
 },1000); }
@@ -499,19 +509,33 @@ function endSession(){
     (session.wakeReason?`<br>알람: ${session.wakeReason}`:`<br>알람 미발동`)+
     `<br>수집 epoch: ${session.epochs.length}개`+
     (window.N3_RISK?`<br>N3 모델: 사용`:`<br>N3 모델: 미사용(룰만)`);
+  uploadMeasurement();   // 측정 끝나면 측정 데이터는 바로 서버로 (피드백 안 보내도 손실 없게)
 }
 
-function buildPayload(){
-  return { schema:"powernap_web_v0",
-    session_id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
+// 측정 데이터와 피드백은 같은 session_id로 따로 전송 → 서버에서 합칠 수 있음
+function buildMeasurement(){
+  return { schema:"powernap_web_v0", kind:"measurement", session_id:session.id,
     created:new Date().toISOString(),
     model:{ n3_risk: !!(window.N3_RISK), n_trees: window.N3_RISK?window.N3_RISK.n_trees:0 },
     meta:{mode:session.mode,gender:session.gender,age:session.age,pos:session.pos,
           target_min:session.target_min,cap:session.cap,deadline:session.deadline,useMic:session.useMic},
     result:{duration_min:+nowMin().toFixed(2),onset_min:session.onsetMin,
             wake_reason:session.wakeReason,wake_at_min:session.wakeAtMin},
-    feedback:{asleep:getFbAsleep(),condition:getFbCond(),timing:getFbTiming(),note:$("fbNote").value||null},
     epochs_30s:session.epochs, audio_features_5s:session.micBuf };
+}
+function buildFeedback(){
+  return { schema:"powernap_web_v0", kind:"feedback", session_id:session.id,
+    created:new Date().toISOString(),
+    meta:{mode:session.mode,gender:session.gender,age:session.age},
+    feedback:{asleep:getFbAsleep(),condition:getFbCond(),timing:getFbTiming(),note:$("fbNote").value||null} };
+}
+async function uploadMeasurement(){
+  const payload=buildMeasurement();
+  $("saveStatus").textContent="측정 데이터 저장 중…";
+  try{ await uploadToSupabase(payload);
+    $("saveStatus").textContent="✅ 측정 데이터가 서버에 저장됐어요."; }
+  catch(err){ $("saveStatus").textContent="⚠ 측정 저장 실패: "+((err&&err.message)||err)+" — 아래 파일로 받아 보내주세요.";
+    showDownload(payload); }
 }
 function showDownload(payload){
   const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
@@ -520,15 +544,13 @@ function showDownload(payload){
     +`<br><span class="note">서버 저장에 실패했어요. 이 파일을 보내주시면 됩니다.</span>`;
 }
 $("saveBtn").addEventListener("click", async ()=>{
-  const btn=$("saveBtn"); const payload=buildPayload();
-  btn.disabled=true; btn.textContent="저장 중…"; $("dlLink").textContent="";
+  const btn=$("saveBtn"); btn.disabled=true; btn.textContent="보내는 중…";
   try{
-    await uploadToSupabase(payload);
-    btn.textContent="✅ 서버 저장 완료";
-    $("dlLink").innerHTML=`<span class="note">데이터가 서버에 안전하게 저장됐어요. 감사합니다!</span>`;
+    await uploadToSupabase(buildFeedback());
+    btn.textContent="✅ 피드백 전송 완료";
   }catch(err){
-    btn.disabled=false; btn.textContent="다시 저장 시도";
-    showDownload(payload);
+    btn.disabled=false; btn.textContent="피드백 다시 보내기";
+    $("dlLink").innerHTML=`<span class="note">피드백 전송 실패: ${(err&&err.message)||err}</span>`;
   }
 });
 $("againBtn").addEventListener("click",()=>location.reload());
