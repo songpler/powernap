@@ -71,7 +71,7 @@
 
       <div id="napCard">
         <div class="label">① 낮잠 종류 (목표 시간·안전 상한 포함)</div>
-        <div class="preset sel" data-type="powernap" data-target="20" data-cap="30"><div class="t">파워냅 · 빠른 피로 회복</div><div class="d">수면 ~20분. 깊은잠 들기 직전에 깨움. 가장 안전·권장.</div></div>
+        <div class="preset sel" data-type="powernap" data-target="30" data-cap="30"><div class="t">파워냅 · 빠른 피로 회복</div><div class="d">잠든 뒤 최대 30분. 깊은잠 위험 시 더 일찍 깨움. 가장 안전·권장.</div></div>
         <div class="preset" data-type="cycle" data-target="90" data-cap="100"><div class="t">1 사이클 · 평상 낮잠</div><div class="d">수면 ~90분. 한 수면 주기 끝(얕은 잠)에 깨움. 가벼운 충전.</div></div>
         <div class="preset" data-type="cycle" data-target="180" data-cap="190"><div class="t">2 사이클 · 긴 낮잠</div><div class="d">수면 ~3시간. 두 주기 끝에 깨움. 밤샘·수면부족 회복용.</div></div>
         <div class="note" id="napEta"></div>
@@ -193,7 +193,7 @@ $("napCard").addEventListener("click",(e)=>{ const p=e.target.closest(".preset")
 function updateEta(){
   $("napEta").textContent = napType==="cycle"
     ? `예상: 잠든 뒤 약 ${napTargetMin}분(${napTargetMin>=180?2:1}주기) 후, 얕은 잠일 때 깨움. (눕고 잠들기까지는 별도)`
-    : `예상: 잠든 뒤 약 ${napTargetMin}분 후, 깊은잠 들기 전에 깨움. (눕고 잠들기까지는 별도)`;
+    : `예상: 잠든 뒤 최대 ${napTargetMin}분, 깊은잠 위험 시 더 일찍 깨움. (눕고 잠들기까지는 별도)`;
 }
 updateEta();
 
@@ -218,7 +218,7 @@ window.addEventListener("load",()=>{
 
 // ---------------- feature computation (JS port of calibration.py) ----------------
 const EPOCH_SEC=30, CAL_SEC=90, G=9.80665, EPS=1e-4, RCLIP=20.0, DCLIP=-2.0;
-const CAL_MOVE_MAX=0.12;  // 보정 중 이 ENMO(움직임) 이상이면 큰 움직임 → 기준값 다시 잡기
+const CAL_MOVE_MAX=0.08;  // 보정 중 30초 구간의 ENMO 중앙값이 이 이상(걷기·폰 옮기기 등 지속적 큰 움직임)이면 기준값 다시. 침대 안 잠깐 뒤척임은 허용.
 function rms(a){let s=0;for(const v of a)s+=v*v;return Math.sqrt(s/Math.max(a.length,1));}
 function percentile(a,p){ if(!a.length)return 0; const b=[...a].sort((x,y)=>x-y);
   const i=Math.min(b.length-1,Math.max(0,Math.round((p/100)*(b.length-1)))); return b[i]; }
@@ -307,7 +307,7 @@ function processEpoch(){
     // 보정: 큰 움직임 없는 연속 90초를 모아 기준값을 잡음. 폰 옮기기·잠자리 이동 등 큰 움직임 시 초기화.
     const cfs=Math.max(10, buf.length/EPOCH_SEC);
     const cmc=computeMags(buf,cfs);
-    if(percentile(cmc.enmo,90) > CAL_MOVE_MAX){
+    if(percentile(cmc.enmo,50) > CAL_MOVE_MAX){
       session.calAccel=[]; session.calEpochs=0;
       $("calNote").textContent="움직임이 커서 기준값을 다시 잡는 중이에요. 편하게 누워 가만히 계세요.";
       return;
@@ -367,16 +367,14 @@ function decideWake(elapsed, stillness, n3){
     return;
   }
 
-  // 파워냅: 깊은잠(N3) 들기 직전에 깨움.
-  // N3 긴급은 측정 10분 이후부터만 작동(잠들기 전 오탐으로 깨우지 않게). 입면 미감지여도 보호되도록 onset 조건 제거.
-  if(elapsed>=10 && n3!=null){
+  // 파워냅: 잠든 게 확인(입면)된 뒤에만 작동.
+  // 입면 10분 후부터 N3 위험이 높으면 즉시 깨우고, 아니면 잠든 뒤 목표(30분)에 깨움.
+  // 입면을 못 잡으면 N3·목표로는 안 깨움(잠 안 든 채 울리는 일 방지) — 데드라인이 최후 보장.
+  if(s.onsetMin!==null && (elapsed - s.onsetMin) >= 10 && n3!=null){
     const deepRisk = 0.7*n3 + 0.3*stillness;
-    const thr = napClock < s.target_min ? 0.70 : 0.55;
-    if(deepRisk>=thr) return fireWake("n3_risk_imminent");
+    if(deepRisk >= 0.70) return fireWake("n3_risk_imminent");
   }
-  if(napClock>=s.target_min && stillness>=0.45) return fireWake("target_reached_stable");
-  if(s.onsetMin!==null && napClock>=capMin) return fireWake("safety_cap");
-  if(napClock>=s.target_min+5) return fireWake("max_time");
+  if(s.onsetMin!==null && napClock >= s.target_min) return fireWake("target_reached");
 }
 
 function fireWake(reason){ if(session.woke) return;
