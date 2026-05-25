@@ -65,23 +65,33 @@
       <div class="row" id="pos"><div class="opt" data-v="bed">침대 위</div><div class="opt" data-v="pillow">베개 옆</div><div class="opt" data-v="mattress">매트리스 위</div><div class="opt" data-v="table">협탁</div><div class="opt" data-v="desk">책상</div></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="wakeCard">
       <div class="ttl">⏰ 언제 깨울까요?</div>
-      <div class="note" style="margin-top:0">낮잠 종류를 고르면 <b>목표 시간·안전 상한이 함께</b> 정해져요. 아래 <b>반드시 깰 시각</b>을 정하면 그 시각엔 무조건 깨웁니다.</div>
+      <div class="note" style="margin-top:0">종류를 고르면 <b>목표 시간·안전 상한이 함께</b> 정해져요. 아래 <b>반드시 깰 시각</b>을 정하면 그 시각엔 무조건 깨웁니다.</div>
 
       <div id="napCard">
-        <div class="label">① 낮잠 종류 (목표 시간·안전 상한 포함)</div>
-        <div class="preset sel" data-type="powernap" data-target="30" data-cap="30"><div class="t">파워냅 · 빠른 피로 회복</div><div class="d">잠든 뒤 최대 30분. 깊은잠 위험 시 더 일찍 깨움. 가장 안전·권장.</div></div>
-        <div class="preset" data-type="cycle" data-target="90" data-cap="100"><div class="t">1 사이클 · 평상 낮잠</div><div class="d">수면 ~90분. 한 수면 주기 끝(얕은 잠)에 깨움. 가벼운 충전.</div></div>
+        <div class="label">① 낮잠 종류</div>
+        <div class="preset sel" data-type="powernap" data-target="20" data-cap="30"><div class="t">파워냅 · 빠른 피로 회복</div><div class="d">잠든 뒤 목표 20~25분, 최대 30분. 깊은잠 위험 시 더 일찍 깨움. 권장.</div></div>
+        <div class="preset" data-type="cycle" data-target="90" data-cap="100"><div class="t">1 사이클 · 평상 낮잠</div><div class="d">수면 ~90분. 한 수면 주기 끝(얕은 잠)에 깨움.</div></div>
         <div class="preset" data-type="cycle" data-target="180" data-cap="190"><div class="t">2 사이클 · 긴 낮잠</div><div class="d">수면 ~3시간. 두 주기 끝에 깨움. 밤샘·수면부족 회복용.</div></div>
-        <div class="note" id="napEta"></div>
+        <div id="napTargetSel">
+          <div class="label" style="margin-top:12px">목표 기상 (잠든 뒤)</div>
+          <div class="row" id="napTarget"><div class="opt sel" data-v="20">20분</div><div class="opt" data-v="25">25분</div></div>
+          <div class="note">목표 시각엔 바로 안 깨우고, 그때부터 최대 30분까지 깊은잠 위험에 점점 민감하게 깨워요.</div>
+        </div>
       </div>
 
       <div class="hidden" id="nightCard">
-        <div class="label">밤잠 모드</div>
-        <div class="note">밤새 가속도·소리 <b>특징값만</b> 기록합니다 (원본 오디오 저장 안 함). 배터리 소모가 크니 <b>충전 연결</b> 후 사용하세요.</div>
+        <div class="label">① 밤잠 길이 (수면 주기 ≈ 90분)</div>
+        <div class="preset" data-type="cycle" data-target="270" data-cap="285"><div class="t">3 사이클 · 약 4시간 30분</div><div class="d">짧은 밤잠. 주기 끝 얕은 잠에 깨움.</div></div>
+        <div class="preset" data-type="cycle" data-target="360" data-cap="375"><div class="t">4 사이클 · 약 6시간</div><div class="d">기본 밤잠.</div></div>
+        <div class="preset" data-type="cycle" data-target="450" data-cap="465"><div class="t">5 사이클 · 약 7시간 30분</div><div class="d">권장 수면.</div></div>
+        <div class="preset" data-type="cycle" data-target="540" data-cap="555"><div class="t">6 사이클 · 약 9시간</div><div class="d">충분한 수면.</div></div>
         <div class="note warn hidden" id="battWarn">⚠ 충전 중이 아닙니다. 충전기를 연결해 주세요.</div>
+        <div class="note">긴 측정이라 화면을 켠 채 <b>충전 연결</b> 후 사용하세요.</div>
       </div>
+
+      <div class="note" id="napEta" style="margin-top:12px"></div>
 
       <div class="label" style="margin-top:16px">② 반드시 깰 시각 (선택) — 모든 예측이 빗나가도 이 시각엔 깨움</div>
       <input type="time" id="deadline" />
@@ -185,24 +195,39 @@ const getMode=pickGroup("mode"), getGender=pickGroup("gender"), getAge=pickGroup
 const getFbAsleep=pickGroup("fbAsleep"), getFbCond=pickGroup("fbCond"), getFbTiming=pickGroup("fbTiming");
 
 let napType="powernap", napTargetMin=20, napCapMin=30;
-$("napCard").addEventListener("click",(e)=>{ const p=e.target.closest(".preset"); if(!p) return;
-  [...$("napCard").querySelectorAll(".preset")].forEach(c=>c.classList.remove("sel"));
+const AVG_LATENCY_MIN=10;            // 평균 입면 지연(잠들기까지) 가정 — 예상 기상 시각 계산용
+const getNapTarget=pickGroup("napTarget");
+function selectPreset(p){
+  const card=p.closest("#napCard,#nightCard");
+  [...card.querySelectorAll(".preset")].forEach(c=>c.classList.remove("sel"));
   p.classList.add("sel");
   napType=p.dataset.type; napTargetMin=parseInt(p.dataset.target,10); napCapMin=parseInt(p.dataset.cap,10);
-  updateEta(); });
+  const isPN=(napType==="powernap");
+  $("napTargetSel").classList.toggle("hidden", !isPN);
+  if(isPN) napTargetMin=parseInt(getNapTarget()||"20",10);
+  updateEta();
+}
+$("wakeCard").addEventListener("click",(e)=>{ const p=e.target.closest(".preset"); if(p) selectPreset(p); });
+$("napTarget").addEventListener("click",()=>{ if(napType==="powernap"){ napTargetMin=parseInt(getNapTarget()||"20",10); updateEta(); } });
+function fmtClock(d){ let h=d.getHours(); const m=d.getMinutes(); const ap=h<12?"오전":"오후"; let hh=h%12; if(hh===0)hh=12;
+  return `${ap} ${hh}:${String(m).padStart(2,"0")}`; }
 function updateEta(){
-  $("napEta").textContent = napType==="cycle"
-    ? `예상: 잠든 뒤 약 ${napTargetMin}분(${napTargetMin>=180?2:1}주기) 후, 얕은 잠일 때 깨움. (눕고 잠들기까지는 별도)`
-    : `예상: 잠든 뒤 최대 ${napTargetMin}분, 깊은잠 위험 시 더 일찍 깨움. (눕고 잠들기까지는 별도)`;
+  const wake=new Date(Date.now()+(AVG_LATENCY_MIN+napTargetMin)*60000);
+  const kind = napType==="cycle"
+    ? `수면 약 ${napTargetMin}분(${Math.round(napTargetMin/90)}주기) 후 주기 끝 얕은 잠에`
+    : `잠든 뒤 목표 ${napTargetMin}분(최대 30분)에`;
+  $("napEta").innerHTML = `${kind} 깨워요.<br><b>예상 기상 ${fmtClock(wake)}</b> <span style="opacity:.7">(지금 누우면 · 잠들기까지 약 ${AVG_LATENCY_MIN}분 가정)</span>`;
 }
 updateEta();
 
 $("mode").addEventListener("click",()=>{ const m=getMode();
   $("napCard").classList.toggle("hidden", m!=="nap");
   $("nightCard").classList.toggle("hidden", m!=="night");
+  const def = (m==="night") ? $("nightCard").querySelector('.preset[data-target="360"]') : $("napCard").querySelector(".preset");
+  if(def) selectPreset(def);
   $("dlNote").textContent = m==="night"
-    ? "밤잠은 이 시각 근처(가벼운 수면 구간)에서 깨우려 시도하고, 늦어도 이 시각엔 깨웁니다."
-    : "파워냅은 보통 프리셋·안전상한으로 깨우고, 이 시각은 최후 안전선입니다.";
+    ? "밤잠도 주기 끝 얕은 잠에 깨우려 시도하고, 이 시각은 최후의 안전선이에요."
+    : "낮잠 종류대로 깨우고, 이 시각은 최후의 안전선이에요.";
   checkBattery(); });
 async function checkBattery(){ if(getMode()!=="night"||!navigator.getBattery){$("battWarn").classList.add("hidden");return;}
   try{const b=await navigator.getBattery(); $("battWarn").classList.toggle("hidden", b.charging);}catch(e){} }
@@ -278,7 +303,8 @@ function newSession(){ return {
   t0:Date.now(), mode:getMode(), gender:getGender(), age:getAge(), pos:getPos(),
   target_min:napTargetMin, cap:napCapMin, napType:napType, deadline:$("deadline").value, useMic:$("useMic").checked,
   accelBuf:[], calAccel:[], calEpochs:0, baseline:null, fs:50, epochs:[], micBuf:[],
-  onsetMin:null, asleepStreak:0, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
+  onsetMin:null, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
+  sleepState:"pending", sleepClock:0, quietStreak:0, wakeStreak:0, lastMin:null,
   id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
 };}
 
@@ -342,39 +368,58 @@ function processEpoch(){
     stillness:r3(stillness), n3_risk:(n3==null?null:r4(n3))};
   session.epochs.push(rec);
 
-  // 입면 감지: 깨어있는데 가만히 있는 것과 구분하려고 보수적으로 — 안정도 0.6 이상이 2분(4에폭) 연속
-  if(session.onsetMin===null){ session.asleepStreak=stillness>=0.6?session.asleepStreak+1:0;
-    if(session.asleepStreak>=4) session.onsetMin=elapsed; }
+  updateSleepState(feat, stillness, elapsed);
   decideWake(elapsed, stillness, n3);
   updateUI(elapsed, stillness, n3);
 }
 
+// 수면 상태기계: 입면 후 깬 듯한 epoch가 이어지면 수면시계를 멈추거나 입면을 초기화.
+// PENDING(조용 4연속→ASLEEP) / ASLEEP(조용에서만 sleepClock 증가, 깸 3연속→PAUSED)
+// PAUSED(조용 2연속→ASLEEP 복귀, 깸 6연속→입면 초기화 후 PENDING)
+function updateSleepState(feat, stillness, elapsed){
+  const s=session;
+  const dt=(s.lastMin==null)?0:Math.min(elapsed-s.lastMin,1.0); s.lastMin=elapsed;
+  const isWake = (stillness<0.35) || (feat.enmo_rms_ratio_clip>1.3);   // 깸 의심(움직임이 기준보다 큼)
+  const isQuiet = stillness>=0.6;                                       // 수면 추정(잠잠)
+  if(s.sleepState==="pending"){
+    if(isQuiet){ if(++s.quietStreak>=4){ s.sleepState="asleep"; if(s.onsetMin===null)s.onsetMin=elapsed; s.quietStreak=0; s.wakeStreak=0; } }
+    else if(isWake){ s.quietStreak=0; }
+  } else if(s.sleepState==="asleep"){
+    if(isWake){ if(++s.wakeStreak>=3){ s.sleepState="paused"; s.quietStreak=0; } }
+    else { s.wakeStreak=0; s.sleepClock+=dt; }   // 조용/중립 epoch에서만 수면시계 증가
+  } else { // paused
+    if(isWake){ s.quietStreak=0; if(++s.wakeStreak>=6){ s.sleepState="pending"; s.onsetMin=null; s.sleepClock=0; s.quietStreak=0; s.wakeStreak=0; } }
+    else if(isQuiet){ s.wakeStreak=0; if(++s.quietStreak>=2){ s.sleepState="asleep"; s.quietStreak=0; } }
+  }
+}
+
 function decideWake(elapsed, stillness, n3){
   const s=session, MIN_NAP=10;
-  // 데드라인은 checkDeadline()이 매초 '설정 시각 정각'에 처리 (미리 깨우기 없음)
-  if(s.mode==="night") return;          // night = record + deadline (Phase 1)
-  if(elapsed<MIN_NAP) return;           // protect minimum
-
-  const napClock = s.onsetMin!==null ? (elapsed-s.onsetMin) : (elapsed>=30?elapsed-30:0);
-  const capMin = s.cap;  // 프리셋에 내장된 안전 상한(분)
+  // 데드라인은 checkDeadline()이 매초 최우선으로 처리 (모드·상태 무관, 항상 우선)
+  if(elapsed<MIN_NAP) return;        // 측정 직후 최소 보호
+  if(s.onsetMin===null) return;      // 잠든 게 확인 안 되면 N3·목표로는 안 깨움 (데드라인만)
+  const sc=s.sleepClock;             // 실제 수면 시계(분) — 깬 구간은 멈춤
+  const tgt=s.target_min, mx=s.cap;
+  const deepRisk=(n3!=null)?(0.7*n3+0.3*stillness):0;
 
   if(s.napType==="cycle"){
-    // 사이클 낮잠: 목표 직전 윈도우에서 '얕은 잠(움직임 많음)'에 깨움 → 사이클 끝에 기상
-    const windowMin = Math.min(25, Math.max(15, Math.round(s.target_min*0.22)));
-    if(napClock >= s.target_min - windowMin && stillness < 0.45) return fireWake("cycle_light_wake");
-    if(napClock >= s.target_min) return fireWake("cycle_target");
-    if(s.onsetMin!==null && napClock >= capMin) return fireWake("safety_cap");
+    // 사이클(낮잠 1·2, 밤잠 3~6): 목표 직전 윈도우에서 얕은 잠(움직임↑)에 깨움 → 주기 끝 기상
+    const windowMin=Math.min(25, Math.max(15, Math.round(tgt*0.18)));
+    if(sc >= tgt-windowMin && stillness<0.45) return fireWake("cycle_light_wake");
+    if(sc >= tgt) return fireWake("cycle_target");
+    if(sc >= mx) return fireWake("safety_cap");
     return;
   }
 
-  // 파워냅: 잠든 게 확인(입면)된 뒤에만 작동.
-  // 입면 10분 후부터 N3 위험이 높으면 즉시 깨우고, 아니면 잠든 뒤 목표(30분)에 깨움.
-  // 입면을 못 잡으면 N3·목표로는 안 깨움(잠 안 든 채 울리는 일 방지) — 데드라인이 최후 보장.
-  if(s.onsetMin!==null && (elapsed - s.onsetMin) >= 10 && n3!=null){
-    const deepRisk = 0.7*n3 + 0.3*stillness;
-    if(deepRisk >= 0.70) return fireWake("n3_risk_imminent");
+  // 파워냅: 목표 전엔 위험할 때만, 목표~최대는 점점 민감하게, 최대(30)면 무조건.
+  if(sc >= mx) return fireWake("max_reached");
+  if(sc >= tgt){
+    const frac=(sc-tgt)/Math.max(mx-tgt,0.1);   // 0 → 1
+    const thr=0.60 - 0.25*frac;                  // 0.60 → 0.35 (목표→최대로 갈수록 민감)
+    if(n3!=null && deepRisk>=thr) return fireWake("n3_target_window");
+  } else if(sc >= 10){
+    if(n3!=null && deepRisk>=0.70) return fireWake("n3_risk_early");
   }
-  if(s.onsetMin!==null && napClock >= s.target_min) return fireWake("target_reached");
 }
 
 function fireWake(reason){ if(session.woke) return;
@@ -436,7 +481,7 @@ function triggerAlarm(){ startAlarm(); }
 
 function updateUI(elapsed, stillness, n3){
   $("mElapsed").textContent=Math.floor(elapsed);
-  $("mSleep").textContent=session.onsetMin!==null?Math.floor(Math.max(0,elapsed-session.onsetMin)):"–";
+  $("mSleep").textContent=session.onsetMin!==null?Math.floor(session.sleepClock):"–";
   $("mStill").textContent=Math.round(stillness*100)+"%";
   $("mRisk").textContent=n3==null?"–":Math.round(n3*100)+"%";
   if(session.woke) return;
@@ -517,7 +562,7 @@ function endSession(){
   if(micCtx){try{micCtx.close();}catch(e){}}
   $("measure").classList.add("hidden"); $("done").classList.remove("hidden");
   const dur=+nowMin().toFixed(1);
-  const sleep=session.onsetMin!==null?(session.wakeAtMin||dur)-session.onsetMin:null;
+  const sleep=session.onsetMin!==null?session.sleepClock:null;
   $("summary").innerHTML=`모드: <b>${session.mode==="nap"?"파워냅":"밤잠"}</b><br>총 측정: <b>${dur}분</b>`+
     (session.onsetMin!==null?`<br>추정 입면: ${session.onsetMin.toFixed(1)}분 후, 실제 수면 약 <b>${sleep.toFixed(1)}분</b>`:`<br>입면 미감지`)+
     (session.wakeReason?`<br>알람: ${session.wakeReason}`:`<br>알람 미발동`)+
