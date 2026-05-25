@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#0b1020" />
 <title>파워냅 / 수면 측정 (베타)</title>
 <style>
   :root { --bg:#0b1020; --card:#161c2e; --fg:#e8ecf5; --muted:#8b94ad;
@@ -470,7 +471,7 @@ function playPattern(idx){
   }catch(e){}
 }
 function startAlarm(){
-  $("dimOverlay").classList.add("hidden");   // 알람 시 화면 밝게
+  $("dimOverlay").classList.add("hidden"); setThemeDark(false); exitFs();   // 알람 시 화면 밝게 + 전체화면 해제
   if(alarmIv) return;
   let i=0; playPattern(i++);
   if(navigator.vibrate) navigator.vibrate([500,150,500,150,700]);
@@ -536,10 +537,18 @@ $("alarmTestBtn").addEventListener("click", ()=>{ unlockAudio(); startAlarm(); s
   $("permNote").textContent="이게 실제 알람 소리예요. 진짜 알람은 끌 때까지 계속 울려요. (안 들리면 무음모드/볼륨 확인)"; });
 
 // 화면 어둡게(dim) — 측정은 계속, 빛만 줄임. 30초 무동작 시 자동, 탭하면 다시 밝아짐.
-function scheduleDim(){ if(dimTimer)clearTimeout(dimTimer);
-  dimTimer=setTimeout(()=>{ if(session&&!session.woke) $("dimOverlay").classList.remove("hidden"); }, 30000); }
-function brighten(){ $("dimOverlay").classList.add("hidden"); scheduleDim(); }
-$("dimBtn").addEventListener("click", ()=>{ if(session&&!session.woke) $("dimOverlay").classList.remove("hidden"); });
+// 주소창 색을 어둡게(theme-color) — 안드로이드 크롬/삼성 등에서 위 바가 검게 됨
+function setThemeDark(on){ try{ const m=document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute("content", on?"#000000":"#0b1020"); }catch(e){} }
+function exitFs(){ try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen(); }catch(e){} }
+function enterDim(useFs){
+  if(!(session&&!session.woke)) return;
+  $("dimOverlay").classList.remove("hidden"); setThemeDark(true);
+  // 버튼(사용자 제스처)으로 들어올 때만 전체화면 시도 → 위/아래 브라우저 바 숨김(안드로이드)
+  if(useFs){ try{ const el=document.documentElement; (el.requestFullscreen||el.webkitRequestFullscreen||function(){}).call(el); }catch(e){} }
+}
+function scheduleDim(){ if(dimTimer)clearTimeout(dimTimer); dimTimer=setTimeout(()=>enterDim(false), 30000); }
+function brighten(){ $("dimOverlay").classList.add("hidden"); setThemeDark(false); exitFs(); scheduleDim(); }
+$("dimBtn").addEventListener("click", ()=>enterDim(true));
 $("dimOverlay").addEventListener("click", brighten);
 $("wakeBtn").addEventListener("click", ()=>{ stopAlarm(); endSession(); });
 
@@ -555,7 +564,7 @@ $("stopBtn").addEventListener("click", endSession);
 function endSession(){
   if(clockIv)clearInterval(clockIv);
   stopAlarm(); if(dimTimer)clearTimeout(dimTimer);
-  $("dimOverlay").classList.add("hidden"); $("wakeBtn").classList.add("hidden");
+  $("dimOverlay").classList.add("hidden"); $("wakeBtn").classList.add("hidden"); setThemeDark(false); exitFs();
   if(motionHandler)window.removeEventListener("devicemotion",motionHandler);
   if(wakeLock){try{wakeLock.release();}catch(e){}wakeLock=null;}
   if(micStream)micStream.getTracks().forEach(t=>t.stop());
