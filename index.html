@@ -520,7 +520,7 @@ async function requestPerms(){
 }
 
 $("startBtn").addEventListener("click", async ()=>{
-  if(!getGender()||!getAge()||!getPos()){$("permNote").textContent="성별·연령대·폰 위치를 선택해 주세요.";return;}
+  if(!getGender()||!getAge()||!getPos()){$("permNote").innerHTML='<span style="color:var(--danger);font-size:15px;font-weight:700;">성별·연령대·폰 위치를 먼저 선택해야 시작할 수 있어요.</span>';return;}
   unlockAudio();   // 사용자 탭(제스처) 안에서 소리 엔진을 깨워둬야 나중에 알람이 울림
   $("startBtn").disabled=true; $("permNote").textContent="권한 확인 중…";
   const err=await requestPerms();
