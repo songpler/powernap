@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0b1020" />
-<title>파워냅 / 수면 측정 (베타)</title>
+<title>파워냅 / 수면 측정 (베타 V1.5.1)</title>
 <style>
   :root { --bg:#0b1020; --card:#161c2e; --fg:#e8ecf5; --muted:#8b94ad;
           --accent:#5b8cff; --warn:#ffb24d; --danger:#ff5d6c; --ok:#46d39a; }
@@ -37,6 +37,7 @@
   .metrics { display:flex; justify-content:space-around; text-align:center; font-size:13px; color:var(--muted); }
   .metrics b { display:block; color:var(--fg); font-size:18px; }
   .note { font-size:12px; color:var(--muted); margin-top:8px; } .warn { color:var(--warn); }
+  #napEta .etaWake { display:inline-block; margin-top:4px; color:var(--fg); font-size:16px; line-height:1.5; font-weight:700; font-family:inherit; }
   .center { text-align:center; } a.dl { color:var(--accent); }
   .ttl { font-size:16px; font-weight:700; margin:0 0 4px; }
   button.go.alarm { background:var(--danger); }
@@ -51,7 +52,7 @@
 
   <!-- ===== SETUP ===== -->
   <div id="setup">
-    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타</span></h1>
+    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.5.1</span></h1>
     <div class="sub">의료용 수면단계 판정이 아니라, 깨우기 좋은 타이밍을 추정하는 실험용 도구입니다.
       연구용 익명 데이터 수집에 동의하시면 진행해 주세요.</div>
 
@@ -94,8 +95,8 @@
 
       <div class="note" id="napEta" style="margin-top:12px"></div>
 
-      <div class="label" style="margin-top:16px">② 반드시 깰 시각 (선택) — 모든 예측이 빗나가도 이 시각엔 깨움</div>
-      <input type="time" id="deadline" />
+      <div class="label" style="margin-top:16px">② 반드시 깰 시각 <b style="color:var(--danger)">(필수)</b> — 모든 예측이 빗나가도 이 시각엔 깨움</div>
+      <input type="time" id="deadline" style="font-size:30px;font-weight:800;padding:10px 14px;text-align:center;letter-spacing:1px;" />
       <div class="note" id="dlNote">낮잠 종류대로 깨우고, 이 시각은 최후의 안전선이에요.</div>
     </div>
 
@@ -106,7 +107,7 @@
     </div>
 
     <button class="go" id="startBtn">측정 시작</button>
-    <button class="go ghost" id="alarmTestBtn" style="margin-top:8px;">🔔 알람 소리 미리듣기</button>
+    <button class="go ghost" id="alarmTestBtn" style="margin-top:8px;color:var(--danger);border-color:var(--danger);line-height:1.4;">🔔 알람 소리 미리듣기<br><span style="font-size:12px;font-weight:600;">소리가 안 들리면 무음 해제 · 볼륨을 끝까지 올려주세요</span></button>
     <div class="note center" id="permNote"></div>
     <div class="note center" id="modelNote"></div>
     <div class="note center" style="margin-top:14px;line-height:1.6;">본 사이트는 연구용 임시 모델로 제작된 실험 도구로, 측정 결과와 알람 시점이 정확하지 않을 수 있습니다. 수면 도중 깨우거나 제때 깨우지 못해 발생하는 어떠한 불이익이나 손해에 대해서도 책임지거나 보상하지 않습니다.</div>
@@ -217,7 +218,7 @@ function updateEta(){
   const kind = napType==="cycle"
     ? `수면 약 ${napTargetMin}분(${Math.round(napTargetMin/90)}주기) 후 주기 끝 얕은 잠에`
     : `잠든 뒤 목표 ${napTargetMin}분(최대 30분)에`;
-  $("napEta").innerHTML = `${kind} 깨워요.<br><b>예상 기상 ${fmtClock(wake)}</b> <span style="opacity:.7">(지금 누우면 · 잠들기까지 약 ${AVG_LATENCY_MIN}분 가정)</span>`;
+  $("napEta").innerHTML = `${kind} 깨워요.<br><b class="etaWake">예상 기상 ${fmtClock(wake)}</b> <span style="opacity:.7">(지금 누우면 · 잠들기까지 약 ${AVG_LATENCY_MIN}분 가정)</span>`;
 }
 updateEta();
 
@@ -244,7 +245,10 @@ window.addEventListener("load",()=>{
 
 // ---------------- feature computation (JS port of calibration.py) ----------------
 const EPOCH_SEC=30, CAL_SEC=90, G=9.80665, EPS=1e-4, RCLIP=20.0, DCLIP=-2.0;
-const CAL_MOVE_MAX=0.08;  // 보정 중 30초 구간의 ENMO 중앙값이 이 이상(걷기·폰 옮기기 등 지속적 큰 움직임)이면 기준값 다시. 침대 안 잠깐 뒤척임은 허용.
+const CAL_MOVE_MAX=0.08;  // 30초 ENMO 중앙값이 이 이상 = 걷기·폰 옮기기 등 '이동' → 기준값 처음부터 다시
+const CAL_SETTLE=0.035;   // 30초 ENMO 중앙값이 이 미만 = '충분히 가만함' → 자세 다 잡고 잠잠해진 상태로 인정
+const CAL_MAX_MIN=5;      // 자세 잡느라 오래 걸려도 이 시간(분) 지나면 가진 데이터로 기준값 확정(무한대기 방지)
+const ENMO_FLOOR=0.004, DYN_FLOOR=0.002;  // baseline 바닥값(g) — 기준이 거의 0이라 stillness가 1/0으로만 갈리는 문제 방지
 function rms(a){let s=0;for(const v of a)s+=v*v;return Math.sqrt(s/Math.max(a.length,1));}
 function percentile(a,p){ if(!a.length)return 0; const b=[...a].sort((x,y)=>x-y);
   const i=Math.min(b.length-1,Math.max(0,Math.round((p/100)*(b.length-1)))); return b[i]; }
@@ -264,12 +268,20 @@ function computeMags(buf, fs){
 function fitBaseline(enmo, dyn, fs){
   const win=Math.max(1,Math.round(5*fs)), nWin=Math.floor(enmo.length/win);
   let ie=enmo, id=dyn;
-  if(nWin>=3){ const sc=[]; for(let w=0;w<nWin;w++){sc.push([rms(enmo.slice(w*win,(w+1)*win)),w]);}
-    sc.sort((a,b)=>a[0]-b[0]); const keep=Math.max(1,Math.round(nWin*0.4));
-    ie=[]; id=[]; for(let k=0;k<keep;k++){const w=sc[k][1];for(let i=w*win;i<(w+1)*win;i++){ie.push(enmo[i]);id.push(dyn[i]);}} }
-  return { enmo_median:Math.max(percentile(ie,50),EPS), enmo_p75:Math.max(percentile(ie,75),EPS),
-           enmo_p90:Math.max(percentile(ie,90),EPS), dyn_median:Math.max(percentile(id,50),EPS),
-           dyn_p75:Math.max(percentile(id,75),EPS), dyn_p90:Math.max(percentile(id,90),EPS) };
+  let eScores=[rms(enmo)], dScores=[rms(dyn)];   // 전체 창의 움직임 세기 (activity_scale 후보)
+  if(nWin>=3){
+    eScores=[]; dScores=[];
+    for(let w=0;w<nWin;w++){ eScores.push(rms(enmo.slice(w*win,(w+1)*win))); dScores.push(rms(dyn.slice(w*win,(w+1)*win))); }
+    const order=eScores.map((v,w)=>[v,w]).sort((a,b)=>a[0]-b[0]);  // 조용한 순
+    const keep=Math.max(1,Math.round(nWin*0.4));
+    ie=[]; id=[]; for(let k=0;k<keep;k++){const w=order[k][1];for(let i=w*win;i<(w+1)*win;i++){ie.push(enmo[i]);id.push(dyn[i]);}}
+  }
+  // activity_scale: 전체 창 RMS의 p75 + 바닥값 = 깨어있을 때 보통 움직임 기준 (static_floor와 분리)
+  return { enmo_median:Math.max(percentile(ie,50),ENMO_FLOOR), enmo_p75:Math.max(percentile(ie,75),ENMO_FLOOR),
+           enmo_p90:Math.max(percentile(ie,90),ENMO_FLOOR), dyn_median:Math.max(percentile(id,50),DYN_FLOOR),
+           dyn_p75:Math.max(percentile(id,75),DYN_FLOOR), dyn_p90:Math.max(percentile(id,90),DYN_FLOOR),
+           activity_enmo:Math.max(percentile(eScores,75),ENMO_FLOOR),
+           activity_dyn:Math.max(percentile(dScores,75),DYN_FLOOR) };
 }
 // 17 phone_only features as a name->value object
 function featuresForEpoch(enmo, dyn, b, timeMin, fs){
@@ -287,6 +299,8 @@ function featuresForEpoch(enmo, dyn, b, timeMin, fs){
     dyn_rms_ratio_clip:safeRatio(dyn_rms,b.dyn_median),
     enmo_drop_pct:clip(1-safeRatio(enmo_rms,b.enmo_p75),DCLIP,1),
     dyn_drop_pct:clip(1-safeRatio(dyn_rms,b.dyn_p75),DCLIP,1),
+    enmo_drop_from_awake:clip(1-safeRatio(enmo_rms,b.activity_enmo),DCLIP,1),
+    dyn_drop_from_awake:clip(1-safeRatio(dyn_rms,b.activity_dyn),DCLIP,1),
     burst_count:burst, burst_rate_per_sec:burst/Math.max(enmo.length/fs,1e-3),
     time_min_since_start:timeMin,
   };
@@ -303,7 +317,7 @@ function nowMin(){return (Date.now()-session.t0)/60000;}
 function newSession(){ return {
   t0:Date.now(), mode:getMode(), gender:getGender(), age:getAge(), pos:getPos(),
   target_min:napTargetMin, cap:napCapMin, napType:napType, deadline:$("deadline").value, useMic:$("useMic").checked,
-  accelBuf:[], calAccel:[], calEpochs:0, baseline:null, fs:50, epochs:[], micBuf:[],
+  accelBuf:[], calAccel:[], calEpochs:0, calCalm:0, baseline:null, fs:50, epochs:[], micBuf:[],
   onsetMin:null, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
   sleepState:"pending", sleepClock:0, quietStreak:0, wakeStreak:0, lastMin:null,
   id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
@@ -331,28 +345,40 @@ function processEpoch(){
   if(buf.length<5) return;
   const elapsed=nowMin();
   if(!session.baseline){
-    // 보정: 큰 움직임 없는 연속 90초를 모아 기준값을 잡음. 폰 옮기기·잠자리 이동 등 큰 움직임 시 초기화.
-    const cfs=Math.max(10, buf.length/EPOCH_SEC);
-    const cmc=computeMags(buf,cfs);
-    if(percentile(cmc.enmo,50) > CAL_MOVE_MAX){
-      session.calAccel=[]; session.calEpochs=0;
-      $("calNote").textContent="움직임이 커서 기준값을 다시 잡는 중이에요. 편하게 누워 가만히 계세요.";
+    // 보정: 두 가지 움직임을 구분한다.
+    //  (1) '이동'(걷기·폰 옮기기, 30초 중앙값>CAL_MOVE_MAX) → 기준값 처음부터 다시.
+    //  (2) '자세 잡기'(눕고 베개·이불 정리 등 중간 움직임) → 버리지 않고 잠잠해질 때까지 기다림.
+    //  잠잠한 30초(<CAL_SETTLE)가 연속 90초 쌓이면 그 구간으로 기준값 확정. 너무 오래 걸리면 가진 데이터로 확정.
+    const fsNow=Math.max(10, buf.length/EPOCH_SEC);
+    const cmc=computeMags(buf,fsNow);
+    const mv=percentile(cmc.enmo,50);                       // 이 30초의 움직임 수준(중앙값)
+    if(mv > CAL_MOVE_MAX){                                   // 이동 중 → 처음부터
+      session.calAccel=[]; session.calEpochs=0; session.calCalm=0;
+      $("calNote").textContent="움직임이 커요(이동 중?). 누워서 자세를 잡고 가만히 계시면 기준값을 잡을게요.";
       return;
     }
     for(const r of buf) session.calAccel.push(r);
-    session.calEpochs=(session.calEpochs||0)+1;
-    if(session.calEpochs < Math.round(CAL_SEC/EPOCH_SEC)){
-      $("calNote").textContent="기준값을 잡는 중… 편하게 누워 계세요. (큰 움직임이 있으면 처음부터 다시 잡아요)";
+    session.calEpochs++;
+    session.calCalm = (mv < CAL_SETTLE) ? session.calCalm+1 : 0;   // 자세 잡는 중간 움직임은 데이터 유지·streak만 리셋
+    const need=Math.round(CAL_SEC/EPOCH_SEC);                       // 90초 = 3epoch
+    const giveUp=nowMin() > CAL_MAX_MIN;                            // 너무 오래 못 잡으면 그냥 확정
+    if(session.calCalm < need && !giveUp){
+      $("calNote").textContent = (mv<CAL_SETTLE)
+        ? "기준값을 잡는 중… 그대로 가만히 계세요."
+        : "편하게 자세를 잡으세요. 잠잠해지면 기준값을 잡을게요. (걷거나 폰을 옮기면 처음부터)";
       return;
     }
-    session.fs=Math.max(10, session.calAccel.length/CAL_SEC);
+    const keepN=Math.round(CAL_SEC*fsNow);                         // 가장 최근 90초(자세 다 잡고 잠잠해진 구간)만 사용
+    if(session.calAccel.length>keepN) session.calAccel=session.calAccel.slice(-keepN);
+    session.fs=fsNow;
     const cm=computeMags(session.calAccel,session.fs);
     session.baseline=fitBaseline(cm.enmo,cm.dyn,session.fs);
   }
   const fs=Math.max(10, buf.length/EPOCH_SEC);
   const cm=computeMags(buf,fs);
   const feat=featuresForEpoch(cm.enmo,cm.dyn,session.baseline,elapsed,fs);
-  const stillness=clip(feat.enmo_drop_pct,0,1);
+  const stillEnmo=clip(feat.enmo_drop_from_awake,0,1), stillDyn=clip(feat.dyn_drop_from_awake,0,1);
+  const stillness=0.25*stillEnmo + 0.75*stillDyn;   // dynamic(빠른 흔들림) 위주 — 기기 오프셋에 안 휘둘림
   const n3=n3RiskFrom(feat);
   // 모델 입력 17개 특징을 전부 저장 → 나중에 실제 데이터로 재학습 가능
   const r5=v=>+(+v).toFixed(5), r4=v=>+(+v).toFixed(4), r3=v=>+(+v).toFixed(3);
@@ -366,7 +392,8 @@ function processEpoch(){
     enmo_drop_pct:r3(feat.enmo_drop_pct), dyn_drop_pct:r3(feat.dyn_drop_pct),
     burst_count:feat.burst_count, burst_rate_per_sec:r4(feat.burst_rate_per_sec),
     time_min_since_start:+feat.time_min_since_start.toFixed(2),
-    stillness:r3(stillness), n3_risk:(n3==null?null:r4(n3))};
+    stillness:r3(stillness), stillness_enmo:r3(stillEnmo), stillness_dyn:r3(stillDyn),
+    sleep_state:session.sleepState, n3_risk:(n3==null?null:r4(n3))};
   session.epochs.push(rec);
 
   updateSleepState(feat, stillness, elapsed);
@@ -380,7 +407,8 @@ function processEpoch(){
 function updateSleepState(feat, stillness, elapsed){
   const s=session;
   const dt=(s.lastMin==null)?0:Math.min(elapsed-s.lastMin,1.0); s.lastMin=elapsed;
-  const isWake = (stillness<0.35) || (feat.enmo_rms_ratio_clip>1.3);   // 깸 의심(움직임이 기준보다 큼)
+  // 깸 의심(wake-like): ENMO 오프셋에 안 휘둘리게 dynamic(빠른 흔들림)·burst 중심으로 판정
+  const isWake = (clip(feat.dyn_drop_from_awake,0,1) < 0.35) || (feat.dyn_rms > session.baseline.activity_dyn) || (feat.burst_rate_per_sec > 5);
   const isQuiet = stillness>=0.6;                                       // 수면 추정(잠잠)
   if(s.sleepState==="pending"){
     if(isQuiet){ if(++s.quietStreak>=4){ s.sleepState="asleep"; if(s.onsetMin===null)s.onsetMin=elapsed; s.quietStreak=0; s.wakeStreak=0; } }
@@ -395,11 +423,11 @@ function updateSleepState(feat, stillness, elapsed){
 }
 
 function decideWake(elapsed, stillness, n3){
-  const s=session, MIN_NAP=10;
+  const s=session, MIN_SLEEP=10;     // 입면 후 최소 수면(분) — 이만큼은 깨우지 않음
   // 데드라인은 checkDeadline()이 매초 최우선으로 처리 (모드·상태 무관, 항상 우선)
-  if(elapsed<MIN_NAP) return;        // 측정 직후 최소 보호
   if(s.onsetMin===null) return;      // 잠든 게 확인 안 되면 N3·목표로는 안 깨움 (데드라인만)
-  const sc=s.sleepClock;             // 실제 수면 시계(분) — 깬 구간은 멈춤
+  const sc=s.sleepClock;             // 실제 수면 시계(분, 입면 후 누적) — 깬 구간은 멈춤
+  if(sc<MIN_SLEEP) return;           // 입면 후 10분은 보호 (측정 시작 기준이 아니라 잠든 시점 기준)
   const tgt=s.target_min, mx=s.cap;
   const deepRisk=(n3!=null)?(0.7*n3+0.3*stillness):0;
 
@@ -418,7 +446,7 @@ function decideWake(elapsed, stillness, n3){
     const frac=(sc-tgt)/Math.max(mx-tgt,0.1);   // 0 → 1
     const thr=0.60 - 0.25*frac;                  // 0.60 → 0.35 (목표→최대로 갈수록 민감)
     if(n3!=null && deepRisk>=thr) return fireWake("n3_target_window");
-  } else if(sc >= 10){
+  } else {   // 입면 후 10분 ~ 목표 전: 너무 빨리 깊어지면 선제 탈출
     if(n3!=null && deepRisk>=0.70) return fireWake("n3_risk_early");
   }
 }
@@ -473,9 +501,10 @@ function playPattern(idx){
 function startAlarm(){
   $("dimOverlay").classList.add("hidden"); setThemeDark(false); exitFs();   // 알람 시 화면 밝게 + 전체화면 해제
   if(alarmIv) return;
+  const VIB=[600,140,600,140,600,140,900];   // 안드로이드: 무음·진동 모드에서도 진동
   let i=0; playPattern(i++);
-  if(navigator.vibrate) navigator.vibrate([500,150,500,150,700]);
-  alarmIv=setInterval(()=>{ playPattern(i++); if(navigator.vibrate) navigator.vibrate([500,150,500,150,700]); }, 1100);
+  if(navigator.vibrate) navigator.vibrate(VIB);
+  alarmIv=setInterval(()=>{ playPattern(i++); if(navigator.vibrate) navigator.vibrate(VIB); }, 1100);
 }
 function stopAlarm(){ if(alarmIv){ clearInterval(alarmIv); alarmIv=null; } if(navigator.vibrate) navigator.vibrate(0); }
 function triggerAlarm(){ startAlarm(); }
@@ -521,6 +550,7 @@ async function requestPerms(){
 
 $("startBtn").addEventListener("click", async ()=>{
   if(!getGender()||!getAge()||!getPos()){$("permNote").innerHTML='<span style="color:var(--danger);font-size:15px;font-weight:700;">성별·연령대·폰 위치를 먼저 선택해야 시작할 수 있어요.</span>';return;}
+  if(!$("deadline").value){$("permNote").innerHTML='<span style="color:var(--danger);font-size:15px;font-weight:700;">반드시 깰 시각(데드라인)을 먼저 정해야 시작할 수 있어요.</span>';return;}
   unlockAudio();   // 사용자 탭(제스처) 안에서 소리 엔진을 깨워둬야 나중에 알람이 울림
   $("startBtn").disabled=true; $("permNote").textContent="권한 확인 중…";
   const err=await requestPerms();
