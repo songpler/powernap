@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0b1020" />
-<title>파워냅 / 수면 측정 (베타 V1.5.1)</title>
+<title>파워냅 / 수면 측정 (베타 V1.6.0)</title>
 <style>
   :root { --bg:#0b1020; --card:#161c2e; --fg:#e8ecf5; --muted:#8b94ad;
           --accent:#5b8cff; --warn:#ffb24d; --danger:#ff5d6c; --ok:#46d39a; }
@@ -52,7 +52,7 @@
 
   <!-- ===== SETUP ===== -->
   <div id="setup">
-    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.5.1</span></h1>
+    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.6.0</span></h1>
     <div class="sub">의료용 수면단계 판정이 아니라, 깨우기 좋은 타이밍을 추정하는 실험용 도구입니다.
       연구용 익명 데이터 수집에 동의하시면 진행해 주세요.</div>
 
@@ -248,6 +248,10 @@ const EPOCH_SEC=30, CAL_SEC=90, G=9.80665, EPS=1e-4, RCLIP=20.0, DCLIP=-2.0;
 const CAL_MOVE_MAX=0.08;  // 30초 ENMO 중앙값이 이 이상 = 걷기·폰 옮기기 등 '이동' → 기준값 처음부터 다시
 const CAL_SETTLE=0.035;   // 30초 ENMO 중앙값이 이 미만 = '충분히 가만함' → 자세 다 잡고 잠잠해진 상태로 인정
 const CAL_MAX_MIN=5;      // 자세 잡느라 오래 걸려도 이 시간(분) 지나면 가진 데이터로 기준값 확정(무한대기 방지)
+const CAL_MIN_QUIET=2;    // 5분 강제 확정의 최소 조건: 잠잠한 30초 epoch가 최소 이 개수는 모여야 함(없으면 기준값이 뒤척임에 오염됨)
+const MIN_ONSET_MIN=5;    // 입면(onset) 가능 최소 시각(분) — 의학 표준 SOL 하한. 그 전엔 가만히 누워있어도 '깨어있는 정적'이라 가속도만으론 구분 불가
+const ONSET_QUIET_STREAK=6;  // 연속 잠잠 epoch 수(30초×6=3분). 기존 4(2분)→6으로 강화: "확실히 잠든 흐름"이어야 인정
+const ONSET_QUIET_THRESH=0.7; // 입면 판정용 stillness 문턱(기존 0.6→0.7). 약한 가만함은 깨어있는 정적일 가능성 큼
 const ENMO_FLOOR=0.004, DYN_FLOOR=0.002;  // baseline 바닥값(g) — 기준이 거의 0이라 stillness가 1/0으로만 갈리는 문제 방지
 function rms(a){let s=0;for(const v of a)s+=v*v;return Math.sqrt(s/Math.max(a.length,1));}
 function percentile(a,p){ if(!a.length)return 0; const b=[...a].sort((x,y)=>x-y);
@@ -317,7 +321,7 @@ function nowMin(){return (Date.now()-session.t0)/60000;}
 function newSession(){ return {
   t0:Date.now(), mode:getMode(), gender:getGender(), age:getAge(), pos:getPos(),
   target_min:napTargetMin, cap:napCapMin, napType:napType, deadline:$("deadline").value, useMic:$("useMic").checked,
-  accelBuf:[], calAccel:[], calEpochs:0, calCalm:0, baseline:null, fs:50, epochs:[], micBuf:[],
+  accelBuf:[], calAccel:[], calEpochs:0, calCalm:0, calQuiet:0, baseline:null, fs:50, epochs:[], micBuf:[],
   onsetMin:null, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
   sleepState:"pending", sleepClock:0, quietStreak:0, wakeStreak:0, lastMin:null,
   id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
@@ -345,33 +349,43 @@ function processEpoch(){
   if(buf.length<5) return;
   const elapsed=nowMin();
   if(!session.baseline){
-    // 보정: 두 가지 움직임을 구분한다.
-    //  (1) '이동'(걷기·폰 옮기기, 30초 중앙값>CAL_MOVE_MAX) → 기준값 처음부터 다시.
-    //  (2) '자세 잡기'(눕고 베개·이불 정리 등 중간 움직임) → 버리지 않고 잠잠해질 때까지 기다림.
-    //  잠잠한 30초(<CAL_SETTLE)가 연속 90초 쌓이면 그 구간으로 기준값 확정. 너무 오래 걸리면 가진 데이터로 확정.
+    // 보정: 세 단계 판정
+    //  (1) '이동'(걷기·폰 옮기기, 30초 중앙값>CAL_MOVE_MAX) → 모두 초기화하고 처음부터.
+    //  (2) '자세 잡기'(중간 움직임) → 기준값 재료엔 안 넣고 잠잠해질 때까지 기다림(데이터 유지 X).
+    //  (3) '잠잠'(<CAL_SETTLE) → 그 30초의 샘플만 calAccel(기준값 재료)에 모음.
+    //  확정 조건: 잠잠 90초 연속(calCalm≥3) **또는** 5분 경과 + 잠잠 epoch ≥CAL_MIN_QUIET개(오염 방지).
     const fsNow=Math.max(10, buf.length/EPOCH_SEC);
     const cmc=computeMags(buf,fsNow);
     const mv=percentile(cmc.enmo,50);                       // 이 30초의 움직임 수준(중앙값)
     if(mv > CAL_MOVE_MAX){                                   // 이동 중 → 처음부터
-      session.calAccel=[]; session.calEpochs=0; session.calCalm=0;
+      session.calAccel=[]; session.calEpochs=0; session.calCalm=0; session.calQuiet=0;
       $("calNote").textContent="움직임이 커요(이동 중?). 누워서 자세를 잡고 가만히 계시면 기준값을 잡을게요.";
       return;
     }
-    for(const r of buf) session.calAccel.push(r);
     session.calEpochs++;
-    session.calCalm = (mv < CAL_SETTLE) ? session.calCalm+1 : 0;   // 자세 잡는 중간 움직임은 데이터 유지·streak만 리셋
-    const need=Math.round(CAL_SEC/EPOCH_SEC);                       // 90초 = 3epoch
-    const giveUp=nowMin() > CAL_MAX_MIN;                            // 너무 오래 못 잡으면 그냥 확정
-    if(session.calCalm < need && !giveUp){
-      $("calNote").textContent = (mv<CAL_SETTLE)
-        ? "기준값을 잡는 중… 그대로 가만히 계세요."
-        : "편하게 자세를 잡으세요. 잠잠해지면 기준값을 잡을게요. (걷거나 폰을 옮기면 처음부터)";
+    if(mv < CAL_SETTLE){                                     // 잠잠한 30초 → 기준값 재료에 모음
+      for(const r of buf) session.calAccel.push(r);
+      session.calCalm++; session.calQuiet++;
+    } else {                                                 // 자세 잡는 중간 움직임 → 재료엔 안 넣고 연속 streak만 리셋
+      session.calCalm=0;
+    }
+    const need=Math.round(CAL_SEC/EPOCH_SEC);                // 90초 = 3epoch 연속 잠잠
+    const giveUp=nowMin() > CAL_MAX_MIN;                     // 5분 경과
+    const forceOk=session.calQuiet >= CAL_MIN_QUIET;         // 강제 확정 최소 조건(뒤척임만으로 baseline 오염 방지)
+    const ready=(session.calCalm >= need) || (giveUp && forceOk);
+    if(!ready){
+      if(giveUp && !forceOk){
+        // 5분 지났는데 잠잠 epoch가 아직 부족 → 강제 확정 보류, 강한 안내 유지
+        $("calNote").textContent="폰을 내려놓고 30초만 가만히 있어주세요. (기준값 잡을 잠잠한 구간이 아직 없어요)";
+      } else {
+        $("calNote").textContent = (mv<CAL_SETTLE)
+          ? "기준값을 잡는 중… 그대로 가만히 계세요."
+          : "편하게 자세를 잡으세요. 잠잠해지면 기준값을 잡을게요. (걷거나 폰을 옮기면 처음부터)";
+      }
       return;
     }
-    const keepN=Math.round(CAL_SEC*fsNow);                         // 가장 최근 90초(자세 다 잡고 잠잠해진 구간)만 사용
-    if(session.calAccel.length>keepN) session.calAccel=session.calAccel.slice(-keepN);
     session.fs=fsNow;
-    const cm=computeMags(session.calAccel,session.fs);
+    const cm=computeMags(session.calAccel,session.fs);       // calAccel은 잠잠 epoch 샘플만 들어있음 → 오염 없음
     session.baseline=fitBaseline(cm.enmo,cm.dyn,session.fs);
   }
   const fs=Math.max(10, buf.length/EPOCH_SEC);
@@ -402,17 +416,23 @@ function processEpoch(){
 }
 
 // 수면 상태기계: 입면 후 깬 듯한 epoch가 이어지면 수면시계를 멈추거나 입면을 초기화.
-// PENDING(조용 4연속→ASLEEP) / ASLEEP(조용에서만 sleepClock 증가, 깸 3연속→PAUSED)
+// PENDING(stillness≥0.7이 6연속 = 3분 + 측정 시작 5분 후부터 가능 → ASLEEP)
+// ASLEEP(stillness≥0.6에서만 sleepClock 증가, 깸 3연속→PAUSED)
 // PAUSED(조용 2연속→ASLEEP 복귀, 깸 6연속→입면 초기화 후 PENDING)
 function updateSleepState(feat, stillness, elapsed){
   const s=session;
   const dt=(s.lastMin==null)?0:Math.min(elapsed-s.lastMin,1.0); s.lastMin=elapsed;
   // 깸 의심(wake-like): ENMO 오프셋에 안 휘둘리게 dynamic(빠른 흔들림)·burst 중심으로 판정
   const isWake = (clip(feat.dyn_drop_from_awake,0,1) < 0.35) || (feat.dyn_rms > session.baseline.activity_dyn) || (feat.burst_rate_per_sec > 5);
-  const isQuiet = stillness>=0.6;                                       // 수면 추정(잠잠)
+  const isQuietForOnset = stillness>=ONSET_QUIET_THRESH;                // 입면 판정용: 더 엄격(0.7) — 깨어있는 정적과 구분
+  const isQuiet = stillness>=0.6;                                       // 입면 후 유지 판정용: 기존 그대로(0.6)
   if(s.sleepState==="pending"){
-    if(isQuiet){ if(++s.quietStreak>=4){ s.sleepState="asleep"; if(s.onsetMin===null)s.onsetMin=elapsed; s.quietStreak=0; s.wakeStreak=0; } }
-    else if(isWake){ s.quietStreak=0; }
+    // 입면 인정: stillness ≥0.7이 3분 연속 + 측정 시작 후 ≥5분(의학상 가장 빠른 SOL 하한)
+    if(isQuietForOnset){
+      if(++s.quietStreak>=ONSET_QUIET_STREAK && elapsed>=MIN_ONSET_MIN){
+        s.sleepState="asleep"; if(s.onsetMin===null)s.onsetMin=elapsed; s.quietStreak=0; s.wakeStreak=0;
+      }
+    } else if(isWake){ s.quietStreak=0; }
   } else if(s.sleepState==="asleep"){
     if(isWake){ if(++s.wakeStreak>=3){ s.sleepState="paused"; s.quietStreak=0; } }
     else { s.wakeStreak=0; s.sleepClock+=dt; }   // 조용/중립 epoch에서만 수면시계 증가
