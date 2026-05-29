@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0b1020" />
-<title>파워냅 / 수면 측정 (베타 V1.6.0)</title>
+<title>파워냅 / 수면 측정 (베타 V1.7.0)</title>
 <style>
   :root { --bg:#0b1020; --card:#161c2e; --fg:#e8ecf5; --muted:#8b94ad;
           --accent:#5b8cff; --warn:#ffb24d; --danger:#ff5d6c; --ok:#46d39a; }
@@ -52,7 +52,7 @@
 
   <!-- ===== SETUP ===== -->
   <div id="setup">
-    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.6.0</span></h1>
+    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.7.0</span></h1>
     <div class="sub">의료용 수면단계 판정이 아니라, 깨우기 좋은 타이밍을 추정하는 실험용 도구입니다.
       연구용 익명 데이터 수집에 동의하시면 진행해 주세요.</div>
 
@@ -168,6 +168,7 @@ const $ = (id) => document.getElementById(id);
 const SUPABASE_URL = "https://luvgdfjiukxztecjnspl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_OwXRZqUDHY0SBATbCV6bwg_Oe-DpHbd";
 const SUPABASE_TABLE = "nap_sessions";
+const APP_VERSION = "1.7.0";   // 업로드 meta에 박혀 어떤 알고리즘 버전으로 측정된 세션인지 자동 추적
 
 async function uploadToSupabase(payload){
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
@@ -323,7 +324,7 @@ function newSession(){ return {
   target_min:napTargetMin, cap:napCapMin, napType:napType, deadline:$("deadline").value, useMic:$("useMic").checked,
   accelBuf:[], calAccel:[], calEpochs:0, calCalm:0, calQuiet:0, baseline:null, fs:50, epochs:[], micBuf:[],
   onsetMin:null, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
-  sleepState:"pending", sleepClock:0, quietStreak:0, wakeStreak:0, lastMin:null,
+  sleepState:"pending", sleepClock:0, quietStreak:0, wakeStreak:0, lastMin:null, lastWakeLikeMin:null,
   id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
 };}
 
@@ -407,7 +408,11 @@ function processEpoch(){
     burst_count:feat.burst_count, burst_rate_per_sec:r4(feat.burst_rate_per_sec),
     time_min_since_start:+feat.time_min_since_start.toFixed(2),
     stillness:r3(stillness), stillness_enmo:r3(stillEnmo), stillness_dyn:r3(stillDyn),
-    sleep_state:session.sleepState, n3_risk:(n3==null?null:r4(n3))};
+    sleep_state:session.sleepState,
+    // 시간 컨텍스트: 측정 시작 기준이 아니라 '입면 후·마지막 깸 후' 기준 (V1.7.0+ 모델 재학습용)
+    time_since_onset: session.onsetMin==null?null:r3(elapsed-session.onsetMin),
+    time_since_last_wake_like: session.lastWakeLikeMin==null?null:r3(elapsed-session.lastWakeLikeMin),
+    n3_risk:(n3==null?null:r4(n3))};
   session.epochs.push(rec);
 
   updateSleepState(feat, stillness, elapsed);
@@ -424,6 +429,7 @@ function updateSleepState(feat, stillness, elapsed){
   const dt=(s.lastMin==null)?0:Math.min(elapsed-s.lastMin,1.0); s.lastMin=elapsed;
   // 깸 의심(wake-like): ENMO 오프셋에 안 휘둘리게 dynamic(빠른 흔들림)·burst 중심으로 판정
   const isWake = (clip(feat.dyn_drop_from_awake,0,1) < 0.35) || (feat.dyn_rms > session.baseline.activity_dyn) || (feat.burst_rate_per_sec > 5);
+  if(isWake) s.lastWakeLikeMin = elapsed;                              // 시간 컨텍스트 특징(time_since_last_wake_like)용
   const isQuietForOnset = stillness>=ONSET_QUIET_THRESH;                // 입면 판정용: 더 엄격(0.7) — 깨어있는 정적과 구분
   const isQuiet = stillness>=0.6;                                       // 입면 후 유지 판정용: 기존 그대로(0.6)
   if(s.sleepState==="pending"){
@@ -635,7 +641,8 @@ function buildMeasurement(){
   return { schema:"powernap_web_v0", kind:"measurement", session_id:session.id,
     created:new Date().toISOString(),
     model:{ n3_risk: !!(window.N3_RISK), n_trees: window.N3_RISK?window.N3_RISK.n_trees:0 },
-    meta:{mode:session.mode,gender:session.gender,age:session.age,pos:session.pos,
+    meta:{app_version:APP_VERSION,
+          mode:session.mode,gender:session.gender,age:session.age,pos:session.pos,
           target_min:session.target_min,cap:session.cap,deadline:session.deadline,useMic:session.useMic},
     result:{duration_min:+nowMin().toFixed(2),onset_min:session.onsetMin,
             wake_reason:session.wakeReason,wake_at_min:session.wakeAtMin},
@@ -644,7 +651,7 @@ function buildMeasurement(){
 function buildFeedback(){
   return { schema:"powernap_web_v0", kind:"feedback", session_id:session.id,
     created:new Date().toISOString(),
-    meta:{mode:session.mode,gender:session.gender,age:session.age},
+    meta:{app_version:APP_VERSION, mode:session.mode,gender:session.gender,age:session.age},
     feedback:{asleep:getFbAsleep(),condition:getFbCond(),timing:getFbTiming(),note:$("fbNote").value||null} };
 }
 async function uploadMeasurement(){
