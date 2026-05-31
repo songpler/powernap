@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0b1020" />
-<title>파워냅 / 수면 측정 (베타 V1.8.0)</title>
+<title>파워냅 / 수면 측정 (베타 V1.8.1)</title>
 <style>
   :root { --bg:#0b1020; --card:#161c2e; --fg:#e8ecf5; --muted:#8b94ad;
           --accent:#5b8cff; --warn:#ffb24d; --danger:#ff5d6c; --ok:#46d39a; }
@@ -52,7 +52,7 @@
 
   <!-- ===== SETUP ===== -->
   <div id="setup">
-    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.8.0</span></h1>
+    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.8.1</span></h1>
     <div class="sub">의료용 수면단계 판정이 아니라, 깨우기 좋은 타이밍을 추정하는 실험용 도구입니다.
       연구용 익명 데이터 수집에 동의하시면 진행해 주세요.</div>
 
@@ -168,7 +168,7 @@ const $ = (id) => document.getElementById(id);
 const SUPABASE_URL = "https://luvgdfjiukxztecjnspl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_OwXRZqUDHY0SBATbCV6bwg_Oe-DpHbd";
 const SUPABASE_TABLE = "nap_sessions";
-const APP_VERSION = "1.8.0";   // 업로드 meta에 박혀 어떤 알고리즘 버전으로 측정된 세션인지 자동 추적
+const APP_VERSION = "1.8.1";   // 업로드 meta에 박혀 어떤 알고리즘 버전으로 측정된 세션인지 자동 추적
 
 async function uploadToSupabase(payload){
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
@@ -317,7 +317,7 @@ function n3RiskFrom(featObj){
 }
 
 // ---------------- session state ----------------
-let session=null, wakeLock=null, motionHandler=null, micStream=null, micCtx=null, micAnalyser=null, clockIv=null, alarmCtx=null, alarmIv=null, dimTimer=null;
+let session=null, wakeLock=null, motionHandler=null, micStream=null, micCtx=null, micAnalyser=null, micIv=null, clockIv=null, alarmCtx=null, alarmIv=null, dimTimer=null;
 function nowMin(){return (Date.now()-session.t0)/60000;}
 function newSession(){ return {
   t0:Date.now(), mode:getMode(), gender:getGender(), age:getAge(), pos:getPos(),
@@ -334,14 +334,21 @@ function onMotion(ev){ const a=ev.accelerationIncludingGravity||ev.acceleration;
 async function startMic(){ try{
   micStream=await navigator.mediaDevices.getUserMedia({audio:true});
   micCtx=new (window.AudioContext||window.webkitAudioContext)();
+  // ★V1.8.1 버그수정: AudioContext가 suspended 상태로 생성되면 분석값이 전부 0(무음)이 됨 → 즉시 resume
+  try{ await micCtx.resume(); }catch(e){}
   const src=micCtx.createMediaStreamSource(micStream); micAnalyser=micCtx.createAnalyser();
   micAnalyser.fftSize=2048; src.connect(micAnalyser);
-  setInterval(()=>{ if(!micAnalyser||session.woke)return; const buf=new Float32Array(micAnalyser.fftSize);
+  if(micIv) clearInterval(micIv);
+  micIv=setInterval(()=>{ if(!micAnalyser||session.woke)return;
+    // 화면 꺼짐/백그라운드 후 context가 다시 멈추면 재개(안 그러면 micBuf가 0으로만 쌓이거나 안 쌓임)
+    if(micCtx && micCtx.state!=="running"){ micCtx.resume().catch(()=>{}); }
+    const buf=new Float32Array(micAnalyser.fftSize);
     micAnalyser.getFloatTimeDomainData(buf); let s=0,zc=0;
     for(let i=0;i<buf.length;i++){ s+=buf[i]*buf[i];
       if(i>0&&((buf[i-1]<0&&buf[i]>=0)||(buf[i-1]>=0&&buf[i]<0))) zc++; }
     session.micBuf.push({t:nowMin(),rms:Math.sqrt(s/buf.length),zcr:zc/buf.length}); },5000);
-}catch(e){console.warn("mic failed",e);} }
+}catch(e){console.warn("mic failed",e);
+  $("permNote").innerHTML='<span style="color:var(--danger);font-weight:700;">마이크를 시작하지 못했습니다('+(e.name||e.message)+'). 권한을 허용했는지 확인해주세요. (측정은 계속 진행됩니다)</span>'; } }
 
 // ---------------- epoch loop ----------------
 function processEpoch(){
@@ -624,6 +631,7 @@ function endSession(){
   $("dimOverlay").classList.add("hidden"); $("wakeBtn").classList.add("hidden"); setThemeDark(false); exitFs();
   if(motionHandler)window.removeEventListener("devicemotion",motionHandler);
   if(wakeLock){try{wakeLock.release();}catch(e){}wakeLock=null;}
+  if(micIv){clearInterval(micIv);micIv=null;}
   if(micStream)micStream.getTracks().forEach(t=>t.stop());
   if(micCtx){try{micCtx.close();}catch(e){}}
   $("measure").classList.add("hidden"); $("done").classList.remove("hidden");
