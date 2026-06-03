@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="theme-color" content="#0b1020" />
-<title>파워냅 / 수면 측정 (베타 V1.8.1)</title>
+<title>파워냅 / 수면 측정 (베타 V2.0.0)</title>
 <style>
   :root { --bg:#0b1020; --card:#161c2e; --fg:#e8ecf5; --muted:#8b94ad;
           --accent:#5b8cff; --warn:#ffb24d; --danger:#ff5d6c; --ok:#46d39a; }
@@ -52,7 +52,7 @@
 
   <!-- ===== SETUP ===== -->
   <div id="setup">
-    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V1.8.1</span></h1>
+    <h1>파워냅 / 수면 측정 <span style="color:var(--muted);font-size:13px;">베타 · V2.0.0</span></h1>
     <div class="sub">의료용 수면단계 판정이 아니라, 깨우기 좋은 타이밍을 추정하는 실험용 도구입니다.
       연구용 익명 데이터 수집에 동의하시면 진행해 주세요.</div>
 
@@ -168,7 +168,7 @@ const $ = (id) => document.getElementById(id);
 const SUPABASE_URL = "https://luvgdfjiukxztecjnspl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_OwXRZqUDHY0SBATbCV6bwg_Oe-DpHbd";
 const SUPABASE_TABLE = "nap_sessions";
-const APP_VERSION = "1.8.1";   // 업로드 meta에 박혀 어떤 알고리즘 버전으로 측정된 세션인지 자동 추적
+const APP_VERSION = "2.0.0";   // 업로드 meta에 박혀 어떤 알고리즘 버전으로 측정된 세션인지 자동 추적
 
 async function uploadToSupabase(payload){
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
@@ -325,6 +325,7 @@ function newSession(){ return {
   accelBuf:[], calAccel:[], calEpochs:0, calCalm:0, calQuiet:0, baseline:null, fs:50, epochs:[], micBuf:[],
   onsetMin:null, woke:false, wakeReason:null, wakeAtMin:null, lastEpochAt:0,
   sleepState:"pending", sleepClock:0, quietStreak:0, wakeStreak:0, lastMin:null, lastWakeLikeMin:null,
+  n3buf:[], n3consec:0, lastMoveMin:null, policy_mode:"balanced", threshold_offset:0,  // v1 균형 정책 상태
   id:(self.crypto&&crypto.randomUUID?crypto.randomUUID():"s"+Date.now()),
 };}
 
@@ -455,6 +456,13 @@ function updateSleepState(feat, stillness, elapsed){
   }
 }
 
+// v1 균형(balanced) 스케줄: 입면 후 sc(분)에서의 n3risk threshold. 그 전이면 null(안 깸).
+function n3ThresholdBalanced(sc){
+  if(sc>=22) return 0.18;
+  if(sc>=15) return 0.25;
+  if(sc>=10) return 0.32;
+  return null;
+}
 function decideWake(elapsed, stillness, n3){
   const s=session, MIN_SLEEP=10;     // 입면 후 최소 수면(분) — 이만큼은 깨우지 않음
   // 데드라인은 checkDeadline()이 매초 최우선으로 처리 (모드·상태 무관, 항상 우선)
@@ -473,15 +481,17 @@ function decideWake(elapsed, stillness, n3){
     return;
   }
 
-  // 파워냅: 목표 전엔 위험할 때만, 목표~최대는 점점 민감하게, 최대(30)면 무조건.
-  if(sc >= mx) return fireWake("max_reached");
-  if(sc >= tgt){
-    const frac=(sc-tgt)/Math.max(mx-tgt,0.1);   // 0 → 1
-    const thr=0.60 - 0.25*frac;                  // 0.60 → 0.35 (목표→최대로 갈수록 민감)
-    if(n3!=null && deepRisk>=thr) return fireWake("n3_target_window");
-  } else {   // 입면 후 10분 ~ 목표 전: 너무 빨리 깊어지면 선제 탈출
-    if(n3!=null && deepRisk>=0.70) return fireWake("n3_risk_early");
-  }
+  // ★파워냅 v1 균형 정책: n3risk 시간대별 threshold + smooth3 + consec2 + 움직임가드.
+  // (검증: scripts/eval_policies.py. floor 10분은 위에서 이미 보호.)
+  if(stillness<0.4){ s.lastMoveMin=sc; s.n3buf=[]; s.n3consec=0; }   // 움직임(자세잡기/뒤척임) → 가드+버퍼초기화
+  if(n3!=null){ s.n3buf.push(n3); if(s.n3buf.length>3) s.n3buf.shift(); }
+  const sm=s.n3buf.length?(s.n3buf.reduce((a,b)=>a+b,0)/s.n3buf.length):0;  // smooth3
+  if(sc >= mx) return fireWake("cap_reached");                       // cap 강제(안전망)
+  if(s.lastMoveMin!=null && (sc-s.lastMoveMin)<1.5) return;          // 움직임 직후 1.5분 가드
+  const th=n3ThresholdBalanced(sc);
+  if(n3!=null && th!=null && sm>=(th+(s.threshold_offset||0))){
+    if(++s.n3consec>=2) return fireWake("n3_imminent");              // 연속 2 epoch
+  } else { s.n3consec=0; }
 }
 
 function fireWake(reason){ if(session.woke) return;
@@ -652,6 +662,7 @@ function buildMeasurement(){
     model:{ n3_risk: !!(window.N3_RISK), n_trees: window.N3_RISK?window.N3_RISK.n_trees:0 },
     meta:{app_version:APP_VERSION,
           mode:session.mode,gender:session.gender,age:session.age,pos:session.pos,
+          policy_mode:session.policy_mode, threshold_offset:session.threshold_offset,
           target_min:session.target_min,cap:session.cap,deadline:session.deadline,useMic:session.useMic},
     result:{duration_min:+nowMin().toFixed(2),onset_min:session.onsetMin,
             wake_reason:session.wakeReason,wake_at_min:session.wakeAtMin},
